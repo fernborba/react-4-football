@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         React 4 Football v7.7.7
+// @name         React 4 Football v7.7.8
 // @namespace    http://tampermonkey.net/
-// @version      7.7.7
+// @version      7.7.8
 // @description  React UI for EA WebApp
 // @author       Fernando
 // @match        https://www.ea.com/*/ea-sports-fc/ultimate-team/web-app/*
@@ -11,7 +11,7 @@
 // @updateURL    https://raw.githubusercontent.com/fernborba/react-4-football/main/dist/react4football.user.js
 // @require      https://unpkg.com/react@18/umd/react.production.min.js
 // @require      https://unpkg.com/react-dom@18/umd/react-dom.production.min.js
-// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v7.7.7
+// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v7.7.8
 // ==/UserScript==
 
 (function () {
@@ -37,7 +37,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     obs.observe(document.documentElement, { childList: true, subtree: true });
   }
 
-  const EXPECTED_BUNDLE_VERSION = "v7.7.7";
+  const EXPECTED_BUNDLE_VERSION = "v7.7.8";
   const startupState = {
     failed: false,
     reason: null,
@@ -104,25 +104,38 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
   }
 
   waitForBody(() => {
-    if (!runUserscriptPreflight({ requireBundle: true, requireSession: true })) return;
-    const container = document.createElement("div");
-    container.id = "r4f-root-overlay";
-    document.body.appendChild(container);
+    waitForEAApp(() => {
+      if (!runUserscriptPreflight({ requireBundle: true, requireEAComponents: true, requireSession: true })) {
+        return;
+      }
 
-    try {
-      window.React4Football.mount(container);
-    } catch (error) {
-      failStartup(`React4Football failed to mount: ${error.message}`);
-      container.remove();
-      return;
-    }
+      let container = document.getElementById("r4f-root-overlay");
+      if (!container) {
+        container = document.createElement("div");
+        container.id = "r4f-root-overlay";
+        document.body.appendChild(container);
+      }
 
-    const payload = GM_getValue("s4f:candidates", null);
-    if (!payload) {
-      console.warn("[S4F] No candidates available");
-    } else {
-      console.log("[S4F] Loaded", payload.players.length, "candidates");
-    }
+      if (container.childElementCount > 0) {
+        console.log("[R4F] Root already mounted, skipping duplicate mount");
+        return;
+      }
+
+      try {
+        window.React4Football.mount(container);
+      } catch (error) {
+        failStartup(`React4Football failed to mount: ${error.message}`);
+        container.remove();
+        return;
+      }
+
+      const payload = GM_getValue("s4f:candidates", null);
+      if (!payload) {
+        console.warn("[S4F] No candidates available");
+      } else {
+        console.log("[S4F] Loaded", payload.players.length, "candidates");
+      }
+    });
   });
 
   // =====================================================
