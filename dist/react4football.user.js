@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         React 4 Football v7.9.2
+// @name         React 4 Football v7.9.3
 // @namespace    http://tampermonkey.net/
-// @version      7.9.2
+// @version      7.9.3
 // @description  React UI for EA WebApp
 // @author       Fernando
 // @match        https://www.ea.com/*/ea-sports-fc/ultimate-team/web-app/*
@@ -11,7 +11,7 @@
 // @updateURL    https://raw.githubusercontent.com/fernborba/react-4-football/main/dist/react4football.user.js
 // @require      https://unpkg.com/react@18/umd/react.production.min.js
 // @require      https://unpkg.com/react-dom@18/umd/react-dom.production.min.js
-// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v7.9.2
+// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v7.9.3
 // ==/UserScript==
 
 (function () {
@@ -37,7 +37,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     obs.observe(document.documentElement, { childList: true, subtree: true });
   }
 
-  const EXPECTED_BUNDLE_VERSION = "v7.9.2";
+  const EXPECTED_BUNDLE_VERSION = "v7.9.3";
   const startupState = {
     failed: false,
     reason: null,
@@ -1582,10 +1582,15 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
   // Pack Opening Automation
   // =====================================================
 
-  const DELAY_MS = 2000; // 2 seconds between requests
+  const DELAY_MIN_MS = 1000;
+  const DELAY_MAX_MS = 1500;
 
   function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  function randomBetween(min, max) {
+    return Math.floor(Math.random() * (max - min + 1)) + min;
   }
 
   /**
@@ -1710,7 +1715,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     console.log("═══════════════════════════════════════════════════════════");
     console.log(`  Pack ID: ${packId || 'auto (first available)'}`);
     console.log(`  Max packs: ${count}`);
-    console.log(`  Delay: ${DELAY_MS}ms between packs`);
+    console.log(`  Delay: ${DELAY_MIN_MS}-${DELAY_MAX_MS}ms between packs`);
     console.log(`  Dry run: ${dryRun}`);
     console.log("═══════════════════════════════════════════════════════════");
 
@@ -1787,8 +1792,9 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
 
         // Wait before next pack
         if (i < packsToOpen.length - 1) {
-          console.log(`\n⏳ Waiting ${DELAY_MS}ms before next pack...`);
-          await sleep(DELAY_MS);
+          const delayMs = randomBetween(DELAY_MIN_MS, DELAY_MAX_MS);
+          console.log(`\n⏳ Waiting ${delayMs}ms before next pack...`);
+          await sleep(delayMs);
         }
 
       } catch (error) {
