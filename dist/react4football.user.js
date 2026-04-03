@@ -1,17 +1,18 @@
 // ==UserScript==
-// @name         React 4 Football v7.10.9
+// @name         React 4 Football v7.10.10
 // @namespace    http://tampermonkey.net/
-// @version      7.10.9
+// @version      7.10.10
 // @description  React UI for EA WebApp
 // @author       Fernando
 // @match        https://www.ea.com/*/ea-sports-fc/ultimate-team/web-app/*
 // @match        https://www.easports.com/*/ea-sports-fc/ultimate-team/web-app/*
+// @grant        unsafeWindow
 // @grant        GM_getValue
 // @downloadURL  https://raw.githubusercontent.com/fernborba/react-4-football/main/dist/react4football.user.js
 // @updateURL    https://raw.githubusercontent.com/fernborba/react-4-football/main/dist/react4football.user.js
 // @require      https://unpkg.com/react@18/umd/react.production.min.js
 // @require      https://unpkg.com/react-dom@18/umd/react-dom.production.min.js
-// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v7.10.9
+// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v7.10.10
 // ==/UserScript==
 
 (function () {
@@ -50,16 +51,18 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     obs.observe(document.documentElement, { childList: true, subtree: true });
   }
 
-  const EXPECTED_BUNDLE_VERSION = "v7.10.9";
+  const EXPECTED_BUNDLE_VERSION = "v7.10.10";
   const startupState = {
     failed: false,
     reason: null,
   };
+  const eaWindow = typeof unsafeWindow !== "undefined" && unsafeWindow ? unsafeWindow : window;
 
   function cacheLastUTSID(value) {
     if (typeof value !== "string") return;
     const sid = value.trim();
     if (!sid) return;
+    eaWindow.__fcxLastUTSID = sid;
     window.__fcxLastUTSID = sid;
     try {
       sessionStorage.setItem("fcx.lastUTSID", sid);
@@ -102,12 +105,12 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
   }
 
   function installUTSIDCapture() {
-    if (window.__r4fUTSIDCaptureInstalled) return;
-    window.__r4fUTSIDCaptureInstalled = true;
+    if (eaWindow.__r4fUTSIDCaptureInstalled) return;
+    eaWindow.__r4fUTSIDCaptureInstalled = true;
 
-    if (typeof window.fetch === "function") {
-      const originalFetch = window.fetch;
-      window.fetch = function (...args) {
+    if (typeof eaWindow.fetch === "function") {
+      const originalFetch = eaWindow.fetch;
+      eaWindow.fetch = function (...args) {
         try {
           const init = args[1];
           const sidFromInit = readUTSIDFromHeaders(init?.headers);
@@ -121,8 +124,8 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
       };
     }
 
-    if (window.XMLHttpRequest?.prototype?.setRequestHeader) {
-      const xhrProto = window.XMLHttpRequest.prototype;
+    if (eaWindow.XMLHttpRequest?.prototype?.setRequestHeader) {
+      const xhrProto = eaWindow.XMLHttpRequest.prototype;
       if (!xhrProto.__r4fUTSIDHeaderPatched) {
         const originalSetRequestHeader = xhrProto.setRequestHeader;
         xhrProto.setRequestHeader = function (name, value) {
@@ -157,13 +160,21 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     }
   }
 
+  function getEAServices() {
+    if (eaWindow?.services) return eaWindow.services;
+    if (typeof services !== "undefined") return services;
+    return null;
+  }
+
   function getNegativeNotificationType() {
-    return typeof UINotificationType !== "undefined" ? UINotificationType.NEGATIVE : undefined;
+    if (typeof UINotificationType !== "undefined") return UINotificationType.NEGATIVE;
+    return eaWindow?.UINotificationType?.NEGATIVE;
   }
 
   function showNotification(message, type = getNegativeNotificationType()) {
-    if (typeof services !== "undefined" && services.Notification?.queue) {
-      services.Notification.queue(type === undefined ? [message] : [message, type]);
+    const servicesApi = getEAServices();
+    if (servicesApi?.Notification?.queue) {
+      servicesApi.Notification.queue(type === undefined ? [message] : [message, type]);
     } else {
       const logger = type === getNegativeNotificationType() ? console.error : console.log;
       logger("[R4F]", message);
@@ -204,7 +215,10 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
 
     if (requireEAComponents) {
       const eaReady =
-        typeof UTSlotActionPanelView !== "undefined" || typeof UTDefaultActionPanelView !== "undefined";
+        typeof UTSlotActionPanelView !== "undefined"
+        || typeof UTDefaultActionPanelView !== "undefined"
+        || typeof eaWindow.UTSlotActionPanelView !== "undefined"
+        || typeof eaWindow.UTDefaultActionPanelView !== "undefined";
       if (!eaReady) {
         return failStartup("EA Web App not ready yet. Refresh and try again.");
       }
@@ -219,15 +233,46 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
 
   const R4F_TAB_TAG = 7426;
   const R4F_TAB_TITLE = "R4F";
+
+  function getUTGameTabBarControllerCtor() {
+    return eaWindow.UTGameTabBarController
+      || (typeof UTGameTabBarController !== "undefined" ? UTGameTabBarController : null);
+  }
+
+  function getUTGameFlowNavigationControllerCtor() {
+    return eaWindow.UTGameFlowNavigationController
+      || (typeof UTGameFlowNavigationController !== "undefined" ? UTGameFlowNavigationController : null);
+  }
+
+  function getUTTabBarItemViewCtor() {
+    return eaWindow.UTTabBarItemView
+      || (typeof UTTabBarItemView !== "undefined" ? UTTabBarItemView : null);
+  }
+
+  function getUTHomeHubViewControllerCtor() {
+    return eaWindow.UTHomeHubViewController
+      || (typeof UTHomeHubViewController !== "undefined" ? UTHomeHubViewController : null);
+  }
+
+  function getUTHomeHubViewCtor() {
+    return eaWindow.UTHomeHubView
+      || (typeof UTHomeHubView !== "undefined" ? UTHomeHubView : null);
+  }
+
+  function getJSUtilsApi() {
+    return eaWindow.JSUtils || (typeof JSUtils !== "undefined" ? JSUtils : null);
+  }
+
+  function getDOMKitApi() {
+    return eaWindow.DOMKit || (typeof DOMKit !== "undefined" ? DOMKit : null);
+  }
+
   const R4F_TAB_DEPENDENCIES = [
-    { name: "services.Localization", available: () => Boolean(window.services && services.Localization) },
-    { name: "UTGameTabBarController", available: () => typeof window.UTGameTabBarController !== "undefined" },
-    { name: "UTGameFlowNavigationController", available: () => typeof window.UTGameFlowNavigationController !== "undefined" },
-    { name: "UTTabBarItemView", available: () => typeof window.UTTabBarItemView !== "undefined" },
-    { name: "UTHomeHubViewController", available: () => typeof window.UTHomeHubViewController !== "undefined" },
-    { name: "UTHomeHubView", available: () => typeof window.UTHomeHubView !== "undefined" },
-    { name: "JSUtils", available: () => typeof window.JSUtils !== "undefined" },
-    { name: "DOMKit", available: () => typeof window.DOMKit !== "undefined" },
+    { name: "UTGameTabBarController", available: () => Boolean(getUTGameTabBarControllerCtor()) },
+    { name: "UTGameFlowNavigationController", available: () => Boolean(getUTGameFlowNavigationControllerCtor()) },
+    { name: "UTTabBarItemView", available: () => Boolean(getUTTabBarItemViewCtor()) },
+    { name: "UTHomeHubViewController", available: () => Boolean(getUTHomeHubViewControllerCtor()) },
+    { name: "UTHomeHubView", available: () => Boolean(getUTHomeHubViewCtor()) },
   ];
 
   function getMissingR4FTabDependencies() {
@@ -243,15 +288,25 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
   }
 
   function R4FTabController() {
-    UTHomeHubViewController.call(this);
+    const HomeHubViewController = getUTHomeHubViewControllerCtor();
+    if (typeof HomeHubViewController === "function") {
+      HomeHubViewController.call(this);
+    }
   }
 
   function R4FTabView() {
-    UTHomeHubView.call(this);
+    const HomeHubView = getUTHomeHubViewCtor();
+    if (typeof HomeHubView === "function") {
+      HomeHubView.call(this);
+    }
   }
 
   function createR4FTabItem() {
-    const tab = new UTTabBarItemView();
+    const TabBarItemView = getUTTabBarItemViewCtor();
+    if (typeof TabBarItemView !== "function") {
+      throw new Error("UTTabBarItemView is unavailable");
+    }
+    const tab = new TabBarItemView();
     tab.init();
     tab.setTag(R4F_TAB_TAG);
     tab.setText(R4F_TAB_TITLE);
@@ -264,8 +319,22 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
       return;
     }
 
-    JSUtils.inherits(R4FTabController, UTHomeHubViewController);
-    JSUtils.inherits(R4FTabView, UTHomeHubView);
+    const HomeHubViewController = getUTHomeHubViewControllerCtor();
+    const HomeHubView = getUTHomeHubViewCtor();
+    if (typeof HomeHubViewController !== "function" || typeof HomeHubView !== "function") {
+      throw new Error("UTHomeHub base classes are unavailable");
+    }
+
+    const jsUtils = getJSUtilsApi();
+    if (jsUtils?.inherits) {
+      jsUtils.inherits(R4FTabController, HomeHubViewController);
+      jsUtils.inherits(R4FTabView, HomeHubView);
+    } else {
+      R4FTabController.prototype = Object.create(HomeHubViewController.prototype);
+      R4FTabController.prototype.constructor = R4FTabController;
+      R4FTabView.prototype = Object.create(HomeHubView.prototype);
+      R4FTabView.prototype.constructor = R4FTabView;
+    }
 
     R4FTabController.prototype.getNavigationTitle = function () {
       return "React 4 Football";
@@ -339,7 +408,12 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
       }
       this.__reactUnmount = null;
       try {
-        DOMKit.remove?.(this.__root);
+        const domKit = getDOMKitApi();
+        if (typeof domKit?.remove === "function") {
+          domKit.remove(this.__root);
+        } else if (this.__root?.parentNode) {
+          this.__root.parentNode.removeChild(this.__root);
+        }
       } catch (error) {
         console.warn("[R4F] failed to remove tab root:", error);
       }
@@ -371,7 +445,8 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
       return false;
     }
 
-    const proto = UTGameTabBarController.prototype;
+    const TabBarController = getUTGameTabBarControllerCtor();
+    const proto = TabBarController?.prototype;
     if (!proto || typeof proto.initWithViewControllers !== "function") {
       console.warn("[R4F] cannot install native tab patch: UTGameTabBarController.prototype.initWithViewControllers is missing");
       return false;
@@ -387,7 +462,11 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
 
       if (!hasR4FTabController(viewControllers)) {
         try {
-          const navController = new UTGameFlowNavigationController();
+          const NavController = getUTGameFlowNavigationControllerCtor();
+          if (typeof NavController !== "function") {
+            throw new Error("UTGameFlowNavigationController is unavailable");
+          }
+          const navController = new NavController();
           navController.initWithRootController(new R4FTabController());
           navController.tabBarItem = createR4FTabItem();
           viewControllers.push(navController);
@@ -667,7 +746,10 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
       if (startupState.failed) return;
       attempts++;
       const eaComponentsReady =
-        typeof UTSlotActionPanelView !== "undefined" || typeof UTDefaultActionPanelView !== "undefined";
+        typeof UTSlotActionPanelView !== "undefined"
+        || typeof UTDefaultActionPanelView !== "undefined"
+        || typeof eaWindow.UTSlotActionPanelView !== "undefined"
+        || typeof eaWindow.UTDefaultActionPanelView !== "undefined";
       const sessionReady = isEaSessionReady();
 
       if (eaComponentsReady && sessionReady) {
@@ -723,13 +805,14 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
 
   function getSelectedPersona() {
     try {
-      if (typeof services !== "undefined") {
-        if (services.User?.getUser?.()?.selectedPersona) {
-          return services.User.getUser().selectedPersona;
+      const servicesApi = getEAServices();
+      if (servicesApi) {
+        if (servicesApi.User?.getUser?.()?.selectedPersona) {
+          return servicesApi.User.getUser().selectedPersona;
         }
 
-        if (services.Authentication?.authData?.selectedPersona) {
-          return services.Authentication.authData.selectedPersona;
+        if (servicesApi.Authentication?.authData?.selectedPersona) {
+          return servicesApi.Authentication.authData.selectedPersona;
         }
       }
     } catch {
@@ -745,13 +828,15 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
 
   function getSessionId() {
     // Try EA's services first
-    if (typeof services !== "undefined" && services.Authentication) {
-      const session = services.Authentication.getUtasSession();
+    const servicesApi = getEAServices();
+    if (servicesApi?.Authentication) {
+      const session = servicesApi.Authentication.getUtasSession();
       if (session && session.sid) return session.sid;
     }
     // Fallback to cached values (same as utils.js getUTSID)
     try {
       return (
+        eaWindow.__fcxLastUTSID ||
         window.__fcxLastUTSID ||
         sessionStorage.getItem("fcx.lastUTSID") ||
         null
