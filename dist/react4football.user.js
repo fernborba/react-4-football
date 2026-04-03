@@ -1,17 +1,18 @@
 // ==UserScript==
-// @name         React 4 Football v7.9.18
+// @name         React 4 Football v7.9.19
 // @namespace    http://tampermonkey.net/
-// @version      7.9.18
+// @version      7.9.19
 // @description  React UI for EA WebApp
 // @author       Fernando
 // @match        https://www.ea.com/*/ea-sports-fc/ultimate-team/web-app/*
 // @match        https://www.easports.com/*/ea-sports-fc/ultimate-team/web-app/*
 // @grant        GM_getValue
+// @run-at       document-start
 // @downloadURL  https://raw.githubusercontent.com/fernborba/react-4-football/main/dist/react4football.user.js
 // @updateURL    https://raw.githubusercontent.com/fernborba/react-4-football/main/dist/react4football.user.js
 // @require      https://unpkg.com/react@18/umd/react.production.min.js
 // @require      https://unpkg.com/react-dom@18/umd/react-dom.production.min.js
-// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v7.9.18
+// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v7.9.19
 // ==/UserScript==
 
 (function () {
@@ -37,7 +38,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     obs.observe(document.documentElement, { childList: true, subtree: true });
   }
 
-  const EXPECTED_BUNDLE_VERSION = "v7.9.18";
+  const EXPECTED_BUNDLE_VERSION = "v7.9.19";
   const startupState = {
     failed: false,
     reason: null,
@@ -119,14 +120,13 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
   }
 
   waitForBody(() => {
+    removeLegacyOverlay();
     initDecisionLogging();
+    waitForSidebarTabMount();
 
     waitForEAApp(() => {
       if (!runUserscriptPreflight({ requireBundle: true, requireEAComponents: true, requireSession: true })) {
         return;
-      }
-      if (!installSidebarTabMount()) {
-        mountReactOverlay();
       }
 
       const payload = GM_getValue("s4f:candidates", null);
@@ -138,26 +138,10 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     });
   });
 
-  function mountReactOverlay() {
-    let container = document.getElementById("r4f-root-overlay");
-    if (!container) {
-      container = document.createElement("div");
-      container.id = "r4f-root-overlay";
-      document.body.appendChild(container);
-    }
-
-    if (container.childElementCount > 0) {
-      console.log("[R4F] Overlay root already mounted, skipping duplicate mount");
-      return true;
-    }
-
-    try {
-      window.React4Football.mount(container);
-      return true;
-    } catch (error) {
-      failStartup(`React4Football failed to mount: ${error.message}`);
-      container.remove();
-      return false;
+  function removeLegacyOverlay() {
+    const legacy = document.getElementById("r4f-root-overlay");
+    if (legacy) {
+      legacy.remove();
     }
   }
 
@@ -304,12 +288,29 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     return true;
   }
 
-  function installSidebarTabMount() {
-    if (!installSidebarPatch()) {
-      return false;
-    }
+  function waitForSidebarTabMount(maxAttempts = 120) {
+    let attempts = 0;
 
-    return true;
+    const tryInstall = () => {
+      if (startupState.failed) {
+        return;
+      }
+
+      attempts += 1;
+
+      if (installSidebarPatch()) {
+        return;
+      }
+
+      if (attempts >= maxAttempts) {
+        failStartup("React4Football could not attach to the EA side navigation.");
+        return;
+      }
+
+      setTimeout(tryInstall, 250);
+    };
+
+    tryInstall();
   }
 
   // =====================================================
