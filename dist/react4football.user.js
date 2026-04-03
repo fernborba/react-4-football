@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         React 4 Football v7.10.8
+// @name         React 4 Football v7.10.9
 // @namespace    http://tampermonkey.net/
-// @version      7.10.8
+// @version      7.10.9
 // @description  React UI for EA WebApp
 // @author       Fernando
 // @match        https://www.ea.com/*/ea-sports-fc/ultimate-team/web-app/*
@@ -11,7 +11,7 @@
 // @updateURL    https://raw.githubusercontent.com/fernborba/react-4-football/main/dist/react4football.user.js
 // @require      https://unpkg.com/react@18/umd/react.production.min.js
 // @require      https://unpkg.com/react-dom@18/umd/react-dom.production.min.js
-// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v7.10.8
+// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v7.10.9
 // ==/UserScript==
 
 (function () {
@@ -50,11 +50,97 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     obs.observe(document.documentElement, { childList: true, subtree: true });
   }
 
-  const EXPECTED_BUNDLE_VERSION = "v7.10.8";
+  const EXPECTED_BUNDLE_VERSION = "v7.10.9";
   const startupState = {
     failed: false,
     reason: null,
   };
+
+  function cacheLastUTSID(value) {
+    if (typeof value !== "string") return;
+    const sid = value.trim();
+    if (!sid) return;
+    window.__fcxLastUTSID = sid;
+    try {
+      sessionStorage.setItem("fcx.lastUTSID", sid);
+    } catch {
+      // Ignore storage errors (private mode/quota/etc)
+    }
+  }
+
+  function readUTSIDFromHeaders(headers) {
+    if (!headers) return null;
+
+    try {
+      if (typeof Headers !== "undefined" && headers instanceof Headers) {
+        return headers.get("X-UT-SID");
+      }
+    } catch {
+      // Ignore and continue to other formats.
+    }
+
+    if (Array.isArray(headers)) {
+      for (const entry of headers) {
+        if (!Array.isArray(entry) || entry.length < 2) continue;
+        const [name, value] = entry;
+        if (typeof name === "string" && name.toLowerCase() === "x-ut-sid") {
+          return value;
+        }
+      }
+      return null;
+    }
+
+    if (typeof headers === "object") {
+      for (const [name, value] of Object.entries(headers)) {
+        if (typeof name === "string" && name.toLowerCase() === "x-ut-sid") {
+          return value;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  function installUTSIDCapture() {
+    if (window.__r4fUTSIDCaptureInstalled) return;
+    window.__r4fUTSIDCaptureInstalled = true;
+
+    if (typeof window.fetch === "function") {
+      const originalFetch = window.fetch;
+      window.fetch = function (...args) {
+        try {
+          const init = args[1];
+          const sidFromInit = readUTSIDFromHeaders(init?.headers);
+          if (sidFromInit) {
+            cacheLastUTSID(sidFromInit);
+          }
+        } catch {
+          // Ignore and continue fetch.
+        }
+        return originalFetch.apply(this, args);
+      };
+    }
+
+    if (window.XMLHttpRequest?.prototype?.setRequestHeader) {
+      const xhrProto = window.XMLHttpRequest.prototype;
+      if (!xhrProto.__r4fUTSIDHeaderPatched) {
+        const originalSetRequestHeader = xhrProto.setRequestHeader;
+        xhrProto.setRequestHeader = function (name, value) {
+          try {
+            if (typeof name === "string" && name.toLowerCase() === "x-ut-sid") {
+              cacheLastUTSID(value);
+            }
+          } catch {
+            // Ignore and continue XHR header setup.
+          }
+          return originalSetRequestHeader.apply(this, arguments);
+        };
+        xhrProto.__r4fUTSIDHeaderPatched = true;
+      }
+    }
+  }
+
+  installUTSIDCapture();
 
   async function initDecisionLogging() {
     if (!window.React4Football?.decisionLogger) {
@@ -151,25 +237,9 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
   }
 
   function warnR4FTabDependencyFailure(prefix, missingDeps) {
-    console.warn(`[R4F] ${prefix}. Missing EA dependency: ${missingDeps.join(", ")}`);
-  }
-
-  function waitForR4FTabDependencies(maxMs = 30000, stepMs = 200) {
-    return new Promise((resolve, reject) => {
-      const start = Date.now();
-      (function poll() {
-        const missingDeps = getMissingR4FTabDependencies();
-        if (missingDeps.length === 0) {
-          resolve();
-          return;
-        }
-        if (Date.now() - start > maxMs) {
-          reject(new Error(`tab injection unavailable; missing dependencies: ${missingDeps.join(", ")}`));
-          return;
-        }
-        setTimeout(poll, stepMs);
-      })();
-    });
+    const message = `[R4F] ${prefix}. Missing EA dependency: ${missingDeps.join(", ")}`;
+    console.warn(message);
+    showNotification(message, getNegativeNotificationType());
   }
 
   function R4FTabController() {
@@ -307,7 +377,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
       return false;
     }
 
-    if (proto.__r4fNativeTabPatched) {
+    if (proto.__r4fPatched) {
       return true;
     }
 
@@ -329,31 +399,71 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
       return originalInitWithViewControllers.call(this, viewControllers);
     };
 
-    proto.__r4fNativeTabPatched = true;
+    proto.__r4fPatched = true;
     console.log("[R4F] native tab patch installed");
     return true;
   }
 
+  function isBundleReadyForNativeTab() {
+    if (!window.React4Football || typeof window.React4Football.mount !== "function") {
+      return false;
+    }
+
+    const bundleVersion = window.React4Football.version;
+    if (!bundleVersion) {
+      return false;
+    }
+
+    if (bundleVersion !== EXPECTED_BUNDLE_VERSION) {
+      failStartup(`Version mismatch: userscript expects ${EXPECTED_BUNDLE_VERSION}, got ${bundleVersion}.`);
+      return false;
+    }
+
+    return true;
+  }
+
+  function ensureNativeTabInjection() {
+    const RETRY_INTERVAL_MS = 500;
+    const WARN_EVERY_ATTEMPTS = 60;
+    let attempts = 0;
+    let injected = false;
+
+    function attemptInstall() {
+      if (startupState.failed || injected) return;
+      attempts += 1;
+
+      if (!isBundleReadyForNativeTab()) {
+        setTimeout(attemptInstall, RETRY_INTERVAL_MS);
+        return;
+      }
+
+      const missingDeps = getMissingR4FTabDependencies();
+      if (missingDeps.length > 0) {
+        if (attempts % WARN_EVERY_ATTEMPTS === 0) {
+          console.warn(`[R4F] waiting for native tab dependencies: ${missingDeps.join(", ")}`);
+        }
+        setTimeout(attemptInstall, RETRY_INTERVAL_MS);
+        return;
+      }
+
+      try {
+        wireR4FTabInheritance();
+        injected = installR4FTabPatch();
+      } catch (error) {
+        console.warn("[R4F] native tab injection failed; retrying:", error);
+      }
+
+      if (!injected) {
+        setTimeout(attemptInstall, RETRY_INTERVAL_MS);
+      }
+    }
+
+    attemptInstall();
+  }
+
   waitForBody(() => {
     initDecisionLogging();
-
-    waitForR4FTabDependencies()
-      .then(() => {
-        if (!runUserscriptPreflight({ requireBundle: true, requireSession: false })) {
-          return;
-        }
-
-        wireR4FTabInheritance();
-        installR4FTabPatch();
-      })
-      .catch(error => {
-        const missingDeps = getMissingR4FTabDependencies();
-        if (missingDeps.length > 0) {
-          warnR4FTabDependencyFailure("native tab injection failed", missingDeps);
-        } else {
-          console.warn("[R4F] native tab injection failed:", error);
-        }
-      });
+    ensureNativeTabInjection();
   });
 
   // =====================================================
