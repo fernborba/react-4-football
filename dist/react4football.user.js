@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         React 4 Football
 // @namespace    http://tampermonkey.net/
-// @version      7.10.28
+// @version      7.10.29
 // @description  React UI for EA WebApp
 // @author       Fernando
 // @match        https://www.ea.com/*/ea-sports-fc/ultimate-team/web-app/*
@@ -12,7 +12,7 @@
 // @updateURL    https://raw.githubusercontent.com/fernborba/react-4-football/main/dist/react4football.meta.js
 // @require      https://unpkg.com/react@18/umd/react.production.min.js
 // @require      https://unpkg.com/react-dom@18/umd/react-dom.production.min.js
-// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v7.10.28
+// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v7.10.29
 // ==/UserScript==
 
 (function () {
@@ -51,7 +51,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     obs.observe(document.documentElement, { childList: true, subtree: true });
   }
 
-  const EXPECTED_BUNDLE_VERSION = "v7.10.28";
+  const EXPECTED_BUNDLE_VERSION = "v7.10.29";
   const startupState = {
     failed: false,
     reason: null,
@@ -785,11 +785,12 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
               showNotification("Quick Builder: R4F bundle not ready. Make sure the R4F tab has been opened first.", getNegativeNotificationType());
               return;
             }
-            // Extract challengeId + setId from the EA view using multiple property paths.
+            // Extract challengeId + setId — three-pass strategy:
+            // 1. Structured property paths on the EA view
+            // 2. One-level property walk of the view
+            // 3. Fallback to values captured by the request interceptor
             const detail = {};
             try {
-              // Ordered list of candidate objects that might hold challenge data.
-              // EA Web App typically stores it on _model, _data, or a direct reference.
               const candidates = [
                 panelView._challenge,
                 panelView._sbcChallenge,
@@ -812,7 +813,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
                 if (sId != null && detail.setId == null) detail.setId = Number(sId);
                 if (detail.challengeId != null && detail.setId != null) break;
               }
-              // Last resort: walk all own string-keyed properties one level deep
+              // Pass 2: walk own string-keyed properties one level deep
               if (detail.challengeId == null || detail.setId == null) {
                 for (const key of Object.keys(panelView)) {
                   const val = panelView[key];
@@ -824,6 +825,14 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
               }
             } catch (extractErr) {
               console.warn("[R4F] Quick Builder ID extraction error:", extractErr);
+            }
+            // Pass 3: fallback to intercepted request context
+            if (detail.challengeId == null && r4fSbcContext.lastChallengeId != null) {
+              detail.challengeId = r4fSbcContext.lastChallengeId;
+              detail._source = "interceptor";
+            }
+            if (detail.setId == null && r4fSbcContext.lastSetId != null) {
+              detail.setId = r4fSbcContext.lastSetId;
             }
             console.log("[R4F] Quick Builder activated", detail);
             showNotification("Quick Builder: starting…", UINotificationType.POSITIVE);
@@ -860,6 +869,103 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
       // info/warn: console only (already logged by the pipeline)
     });
     console.log("[R4F] Quick Builder notification listener installed");
+  }
+
+  // ---- SBC context tracker ----
+  // Populated by intercepting EA's own fetch/XHR calls so Quick Builder always
+  // has a fallback challengeId + setId even when the view object won't expose them.
+
+  const r4fSbcContext = {
+    lastSetId: null,
+    lastChallengeId: null,
+    /** challengeId → setId, built from /sbs/setId/{id}/challenges responses */
+    challengeSetMap: new Map(),
+  };
+
+  function trackSbcUrl(method, url) {
+    const u = String(url || "");
+    // GET /sbs/setId/{setId}/challenges
+    const setMatch = u.match(/\/sbs\/setId\/(\d+)\/challenges/);
+    if (setMatch) {
+      r4fSbcContext.lastSetId = Number(setMatch[1]);
+      console.log("[R4F] SBC context: setId =", r4fSbcContext.lastSetId);
+    }
+    // POST /sbs/challenge/{challengeId}  ← challenge start
+    // GET  /sbs/challenge/{challengeId}/squad  ← already started
+    const challengeMatch = u.match(/\/sbs\/challenge\/(\d+)/);
+    if (challengeMatch) {
+      const id = Number(challengeMatch[1]);
+      const isSquad = /\/squad/.test(u);
+      const isPost = method.toUpperCase() === "POST";
+      if (isSquad || isPost) {
+        r4fSbcContext.lastChallengeId = id;
+        // Resolve setId from our map if we have it
+        if (r4fSbcContext.challengeSetMap.has(id)) {
+          r4fSbcContext.lastSetId = r4fSbcContext.challengeSetMap.get(id);
+        }
+        console.log("[R4F] SBC context: challengeId =", id, "setId =", r4fSbcContext.lastSetId);
+      }
+    }
+  }
+
+  function initSbcRequestInterceptor() {
+    // --- fetch interceptor ---
+    const _origFetch = window.fetch;
+    window.fetch = function (input, init) {
+      const url = typeof input === "string" ? input : input?.url ?? "";
+      const method = init?.method ?? (typeof input === "object" ? input?.method : null) ?? "GET";
+      trackSbcUrl(method, url);
+
+      const promise = _origFetch.apply(this, arguments);
+
+      // Parse /sbs/setId/{id}/challenges response to build challengeId→setId map
+      const setMatch = url.match(/\/sbs\/setId\/(\d+)\/challenges/);
+      if (setMatch) {
+        const setId = Number(setMatch[1]);
+        promise.then(function (resp) {
+          resp.clone().json().then(function (data) {
+            if (Array.isArray(data?.challenges)) {
+              for (const c of data.challenges) {
+                if (c.challengeId != null) {
+                  r4fSbcContext.challengeSetMap.set(Number(c.challengeId), setId);
+                }
+              }
+              console.log("[R4F] SBC context: mapped", data.challenges.length, "challenges → setId", setId);
+            }
+          }).catch(function () {});
+        }).catch(function () {});
+      }
+
+      return promise;
+    };
+
+    // --- XHR interceptor (EA Web App may still use XHR internally) ---
+    const _origOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function (method, url) {
+      trackSbcUrl(method, url);
+
+      // For challenges endpoint also parse the response body
+      const setMatch = String(url || "").match(/\/sbs\/setId\/(\d+)\/challenges/);
+      if (setMatch) {
+        const setId = Number(setMatch[1]);
+        this.addEventListener("load", function () {
+          try {
+            const data = JSON.parse(this.responseText);
+            if (Array.isArray(data?.challenges)) {
+              for (const c of data.challenges) {
+                if (c.challengeId != null) {
+                  r4fSbcContext.challengeSetMap.set(Number(c.challengeId), setId);
+                }
+              }
+            }
+          } catch (_) {}
+        });
+      }
+
+      return _origOpen.apply(this, arguments);
+    };
+
+    console.log("[R4F] SBC request interceptor installed");
   }
 
   // Wait for EA's app to be fully loaded before applying overrides
@@ -935,6 +1041,9 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
   const sbcQuickBuilderStyleSheet = document.createElement("style");
   sbcQuickBuilderStyleSheet.innerText = sbcQuickBuilderStyles;
   document.head.appendChild(sbcQuickBuilderStyleSheet);
+
+  // Intercept EA's fetch/XHR calls to track active SBC challenge + set IDs
+  initSbcRequestInterceptor();
 
   // Install Quick Builder notification bridge immediately (no EA components needed)
   initQuickSolveNotificationListener();
