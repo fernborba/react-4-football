@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         React 4 Football
 // @namespace    http://tampermonkey.net/
-// @version      7.10.23
+// @version      7.10.24
 // @description  React UI for EA WebApp
 // @author       Fernando
 // @match        https://www.ea.com/*/ea-sports-fc/ultimate-team/web-app/*
@@ -12,7 +12,7 @@
 // @updateURL    https://raw.githubusercontent.com/fernborba/react-4-football/main/dist/react4football.meta.js
 // @require      https://unpkg.com/react@18/umd/react.production.min.js
 // @require      https://unpkg.com/react-dom@18/umd/react-dom.production.min.js
-// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v7.10.23
+// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v7.10.24
 // ==/UserScript==
 
 (function () {
@@ -51,7 +51,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     obs.observe(document.documentElement, { childList: true, subtree: true });
   }
 
-  const EXPECTED_BUNDLE_VERSION = "v7.10.23";
+  const EXPECTED_BUNDLE_VERSION = "v7.10.24";
   const startupState = {
     failed: false,
     reason: null,
@@ -739,6 +739,53 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     }
   }
 
+  function getUTSBCSquadDetailPanelViewCtor() {
+    return eaWindow.UTSBCSquadDetailPanelView
+      || (typeof UTSBCSquadDetailPanelView !== "undefined" ? UTSBCSquadDetailPanelView : null);
+  }
+
+  /**
+   * Phase 1: inject a visible "Smart Builder" button into the SBC squad side panel.
+   * No click behavior yet.
+   */
+  function initSbcSmartBuilderButton() {
+    const PanelView = getUTSBCSquadDetailPanelViewCtor();
+    if (!PanelView?.prototype || typeof PanelView.prototype._generate !== "function") {
+      console.warn("[R4F] UTSBCSquadDetailPanelView._generate unavailable; Smart Builder button not installed");
+      return;
+    }
+    if (PanelView.prototype.__r4fSbcSmartBuilderPatched) {
+      return;
+    }
+    const originalGenerate = PanelView.prototype._generate;
+    PanelView.prototype._generate = function () {
+      const result = originalGenerate.apply(this, arguments);
+      try {
+        const root =
+          this.__root
+          || (typeof this.getRootElement === "function" ? this.getRootElement() : null);
+        if (!root || typeof root.querySelector !== "function") {
+          return result;
+        }
+        const container = root.querySelector(".sbc-button-container");
+        if (!container || container.querySelector("[data-r4f-smart-builder]")) {
+          return result;
+        }
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.setAttribute("data-r4f-smart-builder", "1");
+        btn.className = "r4f-sbc-smart-builder-btn";
+        btn.textContent = "Smart Builder";
+        container.appendChild(btn);
+      } catch (error) {
+        console.warn("[R4F] Smart Builder button inject failed:", error);
+      }
+      return result;
+    };
+    PanelView.prototype.__r4fSbcSmartBuilderPatched = true;
+    console.log("[R4F] UTSBCSquadDetailPanelView Smart Builder button hook installed");
+  }
+
   // Wait for EA's app to be fully loaded before applying overrides
   function waitForEAApp(callback, maxAttempts = 50) {
     let attempts = 0;
@@ -792,9 +839,31 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
   lockStyleSheet.innerText = lockStyles;
   document.head.appendChild(lockStyleSheet);
 
+  const sbcSmartBuilderStyles = `
+.SBCSquadPanel .sbc-button-container .r4f-sbc-smart-builder-btn {
+  display: block;
+  margin: 8px auto;
+  width: calc(100% - 16px);
+  min-height: 40px;
+  padding: 0 12px;
+  box-sizing: border-box;
+  border: none;
+  border-radius: 0;
+  background-color: #2d2c36;
+  color: #fcfcfc;
+  font-family: UltimateTeam, sans-serif;
+  font-size: 1em;
+  cursor: default;
+}
+`;
+  const sbcSmartBuilderStyleSheet = document.createElement("style");
+  sbcSmartBuilderStyleSheet.innerText = sbcSmartBuilderStyles;
+  document.head.appendChild(sbcSmartBuilderStyleSheet);
+
   // Initialize the player lock overrides and sell-all button
   waitForEAApp(() => {
     initPlayerLockOverrides();
+    initSbcSmartBuilderButton();
   });
 
   // =====================================================
