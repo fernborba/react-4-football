@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         React 4 Football
 // @namespace    http://tampermonkey.net/
-// @version      7.10.29
+// @version      7.10.30
 // @description  React UI for EA WebApp
 // @author       Fernando
 // @match        https://www.ea.com/*/ea-sports-fc/ultimate-team/web-app/*
@@ -12,7 +12,7 @@
 // @updateURL    https://raw.githubusercontent.com/fernborba/react-4-football/main/dist/react4football.meta.js
 // @require      https://unpkg.com/react@18/umd/react.production.min.js
 // @require      https://unpkg.com/react-dom@18/umd/react-dom.production.min.js
-// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v7.10.29
+// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v7.10.30
 // ==/UserScript==
 
 (function () {
@@ -51,7 +51,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     obs.observe(document.documentElement, { childList: true, subtree: true });
   }
 
-  const EXPECTED_BUNDLE_VERSION = "v7.10.29";
+  const EXPECTED_BUNDLE_VERSION = "v7.10.30";
   const startupState = {
     failed: false,
     reason: null,
@@ -871,6 +871,133 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     console.log("[R4F] Quick Builder notification listener installed");
   }
 
+  /**
+   * Navigate to the SBC challenge squad view using EA's game engine APIs.
+   * Mirrors what the Auto-SBC userscript does with UTSBCSquadSplitViewController:
+   *   1. requestSets → find the set
+   *   2. requestChallengesForSet → find the challenge
+   *   3. loadChallenge → refresh server state
+   *   4. push UTSBCSquadSplitViewController → show updated squad without a page reload
+   */
+  async function navigateToSbcChallenge(setId, challengeId) {
+    try {
+      const svc = getEAServices();
+      if (!svc || !svc.SBC) {
+        console.warn("[R4F] EA SBC service not available for UI refresh");
+        return;
+      }
+
+      const ctx = {}; // unique observer context
+
+      // Invalidate the SBC repository cache so that every subsequent call
+      // fetches fresh data from EA's servers, including the squad we just
+      // submitted via REST API (Paletools uses the same pattern in createSBCTab).
+      if (svc.SBC.repository && typeof svc.SBC.repository.reset === "function") {
+        svc.SBC.repository.reset();
+        console.log("[R4F] Quick Builder: SBC repository cache cleared");
+      }
+
+      // Step 1: get all SBC sets (fresh from server after cache reset)
+      const setsData = await new Promise(function (resolve, reject) {
+        svc.SBC.requestSets().observe(ctx, function (obs, res) {
+          obs.unobserve(ctx);
+          if (res.success) resolve(res.data);
+          else reject(new Error("requestSets failed: " + res.status));
+        });
+      });
+
+      const sbcSet = (setsData.sets || []).find(function (s) {
+        return s.id === setId;
+      });
+      if (!sbcSet) {
+        console.warn("[R4F] SBC set not found for navigation:", setId);
+        return;
+      }
+
+      // Step 2: get challenges (fresh from server — includes the squad we filled)
+      const challengesData = await new Promise(function (resolve, reject) {
+        svc.SBC.requestChallengesForSet(sbcSet).observe(ctx, function (obs, res) {
+          obs.unobserve(ctx);
+          if (res.success) resolve(res.data);
+          else reject(new Error("requestChallengesForSet failed: " + res.status));
+        });
+      });
+
+      const challenge = (challengesData.challenges || []).find(function (c) {
+        return c.id === challengeId;
+      });
+      if (!challenge) {
+        console.warn("[R4F] Challenge not found for navigation:", challengeId);
+        return;
+      }
+
+      // Step 3: load challenge to populate challenge.squad from the server.
+      // After our REST API PUT /squad, the server holds the filled squad.
+      // loadChallenge calls POST /challenge/{id} which returns the current
+      // squad state and stores it in challenge.squad (used by initWithSBCSet).
+      await new Promise(function (resolve) {
+        svc.SBC.loadChallenge(challenge).observe(ctx, function (obs, _res) {
+          obs.unobserve(ctx);
+          resolve();
+        });
+      });
+
+      // Step 4: navigate to the SBC squad split view
+      const getApp =
+        (typeof getAppMain !== "undefined" ? getAppMain : null) ||
+        (eaWindow && typeof eaWindow.getAppMain === "function" ? eaWindow.getAppMain : null);
+
+      if (!getApp) {
+        console.warn("[R4F] getAppMain not available — cannot navigate to SBC view");
+        return;
+      }
+
+      const currentVC = getApp()
+        ?.getRootViewController()
+        ?.getPresentedViewController()
+        ?.getCurrentViewController();
+
+      if (!currentVC || !currentVC.rootController) {
+        console.warn("[R4F] Navigation controller not available");
+        return;
+      }
+
+      const SplitVC =
+        (typeof UTSBCSquadSplitViewController !== "undefined" ? UTSBCSquadSplitViewController : null) ||
+        eaWindow?.UTSBCSquadSplitViewController ||
+        null;
+
+      if (!SplitVC) {
+        console.warn("[R4F] UTSBCSquadSplitViewController not available");
+        return;
+      }
+
+      const showSBC = new SplitVC();
+      showSBC.initWithSBCSet(sbcSet, challengeId);
+      const nav = currentVC.rootController.getRootNavigationController();
+      nav.popViewController();
+      nav.pushViewController(showSBC);
+
+      console.log("[R4F] Quick Builder: navigated to SBC challenge view", challengeId);
+    } catch (err) {
+      console.warn("[R4F] Quick Builder UI refresh error:", err);
+    }
+  }
+
+  /**
+   * Listen for the pipeline's navigate event (fired after squad submission)
+   * and use EA's game APIs to update the current view without a page reload.
+   */
+  function initSbcUiRefreshListener() {
+    window.addEventListener("r4f:quicksolve:navigate", function (e) {
+      const { challengeId, setId } = e.detail || {};
+      if (challengeId && setId) {
+        navigateToSbcChallenge(setId, challengeId);
+      }
+    });
+    console.log("[R4F] SBC UI refresh listener installed");
+  }
+
   // ---- SBC context tracker ----
   // Populated by intercepting EA's own fetch/XHR calls so Quick Builder always
   // has a fallback challengeId + setId even when the view object won't expose them.
@@ -1047,6 +1174,9 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
 
   // Install Quick Builder notification bridge immediately (no EA components needed)
   initQuickSolveNotificationListener();
+
+  // Listen for post-submission navigate event to refresh the SBC squad view
+  initSbcUiRefreshListener();
 
   // Initialize the player lock overrides and sell-all button
   waitForEAApp(() => {
