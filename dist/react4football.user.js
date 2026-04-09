@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         React 4 Football
 // @namespace    http://tampermonkey.net/
-// @version      7.10.24
+// @version      7.10.25
 // @description  React UI for EA WebApp
 // @author       Fernando
 // @match        https://www.ea.com/*/ea-sports-fc/ultimate-team/web-app/*
@@ -12,7 +12,7 @@
 // @updateURL    https://raw.githubusercontent.com/fernborba/react-4-football/main/dist/react4football.meta.js
 // @require      https://unpkg.com/react@18/umd/react.production.min.js
 // @require      https://unpkg.com/react-dom@18/umd/react-dom.production.min.js
-// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v7.10.24
+// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v7.10.25
 // ==/UserScript==
 
 (function () {
@@ -51,7 +51,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     obs.observe(document.documentElement, { childList: true, subtree: true });
   }
 
-  const EXPECTED_BUNDLE_VERSION = "v7.10.24";
+  const EXPECTED_BUNDLE_VERSION = "v7.10.25";
   const startupState = {
     failed: false,
     reason: null,
@@ -745,16 +745,16 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
   }
 
   /**
-   * Phase 1: inject a visible "Smart Builder" button into the SBC squad side panel.
+   * Phase 1: inject a visible "Quick Builder" button into the SBC squad side panel.
    * No click behavior yet.
    */
-  function initSbcSmartBuilderButton() {
+  function initSbcQuickBuilderButton() {
     const PanelView = getUTSBCSquadDetailPanelViewCtor();
     if (!PanelView?.prototype || typeof PanelView.prototype._generate !== "function") {
-      console.warn("[R4F] UTSBCSquadDetailPanelView._generate unavailable; Smart Builder button not installed");
+      console.warn("[R4F] UTSBCSquadDetailPanelView._generate unavailable; Quick Builder button not installed");
       return;
     }
-    if (PanelView.prototype.__r4fSbcSmartBuilderPatched) {
+    if (PanelView.prototype.__r4fSbcQuickBuilderPatched) {
       return;
     }
     const originalGenerate = PanelView.prototype._generate;
@@ -768,22 +768,22 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
           return result;
         }
         const container = root.querySelector(".sbc-button-container");
-        if (!container || container.querySelector("[data-r4f-smart-builder]")) {
+        if (!container || container.querySelector("[data-r4f-quick-builder]")) {
           return result;
         }
         const btn = document.createElement("button");
         btn.type = "button";
-        btn.setAttribute("data-r4f-smart-builder", "1");
-        btn.className = "r4f-sbc-smart-builder-btn";
-        btn.textContent = "Smart Builder";
+        btn.setAttribute("data-r4f-quick-builder", "1");
+        btn.className = "r4f-sbc-quick-builder-btn";
+        btn.textContent = "Quick Builder";
         container.appendChild(btn);
       } catch (error) {
-        console.warn("[R4F] Smart Builder button inject failed:", error);
+        console.warn("[R4F] Quick Builder button inject failed:", error);
       }
       return result;
     };
-    PanelView.prototype.__r4fSbcSmartBuilderPatched = true;
-    console.log("[R4F] UTSBCSquadDetailPanelView Smart Builder button hook installed");
+    PanelView.prototype.__r4fSbcQuickBuilderPatched = true;
+    console.log("[R4F] UTSBCSquadDetailPanelView Quick Builder button hook installed");
   }
 
   // Wait for EA's app to be fully loaded before applying overrides
@@ -839,8 +839,8 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
   lockStyleSheet.innerText = lockStyles;
   document.head.appendChild(lockStyleSheet);
 
-  const sbcSmartBuilderStyles = `
-.SBCSquadPanel .sbc-button-container .r4f-sbc-smart-builder-btn {
+  const sbcQuickBuilderStyles = `
+.SBCSquadPanel .sbc-button-container .r4f-sbc-quick-builder-btn {
   display: block;
   margin: 8px auto;
   width: calc(100% - 16px);
@@ -856,14 +856,14 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
   cursor: default;
 }
 `;
-  const sbcSmartBuilderStyleSheet = document.createElement("style");
-  sbcSmartBuilderStyleSheet.innerText = sbcSmartBuilderStyles;
-  document.head.appendChild(sbcSmartBuilderStyleSheet);
+  const sbcQuickBuilderStyleSheet = document.createElement("style");
+  sbcQuickBuilderStyleSheet.innerText = sbcQuickBuilderStyles;
+  document.head.appendChild(sbcQuickBuilderStyleSheet);
 
   // Initialize the player lock overrides and sell-all button
   waitForEAApp(() => {
     initPlayerLockOverrides();
-    initSbcSmartBuilderButton();
+    initSbcQuickBuilderButton();
   });
 
   // =====================================================
