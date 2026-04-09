@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         React 4 Football
 // @namespace    http://tampermonkey.net/
-// @version      7.10.25
+// @version      7.10.26
 // @description  React UI for EA WebApp
 // @author       Fernando
 // @match        https://www.ea.com/*/ea-sports-fc/ultimate-team/web-app/*
@@ -12,7 +12,7 @@
 // @updateURL    https://raw.githubusercontent.com/fernborba/react-4-football/main/dist/react4football.meta.js
 // @require      https://unpkg.com/react@18/umd/react.production.min.js
 // @require      https://unpkg.com/react-dom@18/umd/react-dom.production.min.js
-// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v7.10.25
+// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v7.10.26
 // ==/UserScript==
 
 (function () {
@@ -51,7 +51,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     obs.observe(document.documentElement, { childList: true, subtree: true });
   }
 
-  const EXPECTED_BUNDLE_VERSION = "v7.10.25";
+  const EXPECTED_BUNDLE_VERSION = "v7.10.26";
   const startupState = {
     failed: false,
     reason: null,
@@ -745,8 +745,8 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
   }
 
   /**
-   * Phase 1: inject a visible "Quick Builder" button into the SBC squad side panel.
-   * No click behavior yet.
+   * Quick Builder button: inject into the SBC squad side panel and wire click to
+   * window.React4Football.runQuickSolve with the current challenge/set IDs.
    */
   function initSbcQuickBuilderButton() {
     const PanelView = getUTSBCSquadDetailPanelViewCtor();
@@ -776,6 +776,42 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
         btn.setAttribute("data-r4f-quick-builder", "1");
         btn.className = "r4f-sbc-quick-builder-btn";
         btn.textContent = "Quick Builder";
+
+        // Capture view reference for ID extraction in the click handler
+        const panelView = this;
+        btn.addEventListener("click", function () {
+          try {
+            if (!window.React4Football || typeof window.React4Football.runQuickSolve !== "function") {
+              showNotification("Quick Builder: R4F bundle not ready. Make sure the R4F tab has been opened first.", getNegativeNotificationType());
+              return;
+            }
+            // Attempt to read challenge and set IDs from the view/controller.
+            // Try common property paths defensively; IDs are optional — the modal
+            // will still open and the user can select manually if they are missing.
+            const detail = {};
+            try {
+              const challenge =
+                panelView._challenge
+                || panelView._sbcChallenge
+                || panelView.challenge
+                || panelView._data?.challenge
+                || null;
+              if (challenge) {
+                const cId = challenge.challengeId ?? challenge.id;
+                if (cId != null) detail.challengeId = Number(cId);
+                const sId = challenge.setId;
+                if (sId != null) detail.setId = Number(sId);
+              }
+            } catch {
+              // ID extraction is best-effort; proceed without IDs
+            }
+            console.log("[R4F] Quick Builder activated", detail);
+            window.React4Football.runQuickSolve(detail);
+          } catch (err) {
+            console.warn("[R4F] Quick Builder click failed:", err);
+          }
+        });
+
         container.appendChild(btn);
       } catch (error) {
         console.warn("[R4F] Quick Builder button inject failed:", error);
