@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         React 4 Football
 // @namespace    http://tampermonkey.net/
-// @version      7.10.26
+// @version      7.10.27
 // @description  React UI for EA WebApp
 // @author       Fernando
 // @match        https://www.ea.com/*/ea-sports-fc/ultimate-team/web-app/*
@@ -12,7 +12,7 @@
 // @updateURL    https://raw.githubusercontent.com/fernborba/react-4-football/main/dist/react4football.meta.js
 // @require      https://unpkg.com/react@18/umd/react.production.min.js
 // @require      https://unpkg.com/react-dom@18/umd/react-dom.production.min.js
-// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v7.10.26
+// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v7.10.27
 // ==/UserScript==
 
 (function () {
@@ -51,7 +51,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     obs.observe(document.documentElement, { childList: true, subtree: true });
   }
 
-  const EXPECTED_BUNDLE_VERSION = "v7.10.26";
+  const EXPECTED_BUNDLE_VERSION = "v7.10.27";
   const startupState = {
     failed: false,
     reason: null,
@@ -786,8 +786,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
               return;
             }
             // Attempt to read challenge and set IDs from the view/controller.
-            // Try common property paths defensively; IDs are optional — the modal
-            // will still open and the user can select manually if they are missing.
+            // Try common property paths defensively; IDs are optional.
             const detail = {};
             try {
               const challenge =
@@ -803,9 +802,10 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
                 if (sId != null) detail.setId = Number(sId);
               }
             } catch {
-              // ID extraction is best-effort; proceed without IDs
+              // ID extraction is best-effort
             }
             console.log("[R4F] Quick Builder activated", detail);
+            showNotification("Quick Builder: starting…", UINotificationType.POSITIVE);
             window.React4Football.runQuickSolve(detail);
           } catch (err) {
             console.warn("[R4F] Quick Builder click failed:", err);
@@ -820,6 +820,25 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     };
     PanelView.prototype.__r4fSbcQuickBuilderPatched = true;
     console.log("[R4F] UTSBCSquadDetailPanelView Quick Builder button hook installed");
+  }
+
+  /**
+   * Listen for pipeline progress events dispatched by the React bundle.
+   * Shows EA toast notifications for success and error outcomes.
+   * Info/warn events are intentionally kept console-only to avoid notification spam.
+   */
+  function initQuickSolveNotificationListener() {
+    window.addEventListener("r4f:quicksolve", function (e) {
+      const { type, message } = e.detail || {};
+      if (!message) return;
+      if (type === "success") {
+        showNotification(message, UINotificationType.POSITIVE);
+      } else if (type === "error") {
+        showNotification(message, getNegativeNotificationType());
+      }
+      // info/warn: console only (already logged by the pipeline)
+    });
+    console.log("[R4F] Quick Builder notification listener installed");
   }
 
   // Wait for EA's app to be fully loaded before applying overrides
@@ -895,6 +914,9 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
   const sbcQuickBuilderStyleSheet = document.createElement("style");
   sbcQuickBuilderStyleSheet.innerText = sbcQuickBuilderStyles;
   document.head.appendChild(sbcQuickBuilderStyleSheet);
+
+  // Install Quick Builder notification bridge immediately (no EA components needed)
+  initQuickSolveNotificationListener();
 
   // Initialize the player lock overrides and sell-all button
   waitForEAApp(() => {
