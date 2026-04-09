@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         React 4 Football
 // @namespace    http://tampermonkey.net/
-// @version      7.10.27
+// @version      7.10.28
 // @description  React UI for EA WebApp
 // @author       Fernando
 // @match        https://www.ea.com/*/ea-sports-fc/ultimate-team/web-app/*
@@ -12,7 +12,7 @@
 // @updateURL    https://raw.githubusercontent.com/fernborba/react-4-football/main/dist/react4football.meta.js
 // @require      https://unpkg.com/react@18/umd/react.production.min.js
 // @require      https://unpkg.com/react-dom@18/umd/react-dom.production.min.js
-// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v7.10.27
+// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v7.10.28
 // ==/UserScript==
 
 (function () {
@@ -51,7 +51,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     obs.observe(document.documentElement, { childList: true, subtree: true });
   }
 
-  const EXPECTED_BUNDLE_VERSION = "v7.10.27";
+  const EXPECTED_BUNDLE_VERSION = "v7.10.28";
   const startupState = {
     failed: false,
     reason: null,
@@ -785,24 +785,45 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
               showNotification("Quick Builder: R4F bundle not ready. Make sure the R4F tab has been opened first.", getNegativeNotificationType());
               return;
             }
-            // Attempt to read challenge and set IDs from the view/controller.
-            // Try common property paths defensively; IDs are optional.
+            // Extract challengeId + setId from the EA view using multiple property paths.
             const detail = {};
             try {
-              const challenge =
-                panelView._challenge
-                || panelView._sbcChallenge
-                || panelView.challenge
-                || panelView._data?.challenge
-                || null;
-              if (challenge) {
-                const cId = challenge.challengeId ?? challenge.id;
-                if (cId != null) detail.challengeId = Number(cId);
-                const sId = challenge.setId;
-                if (sId != null) detail.setId = Number(sId);
+              // Ordered list of candidate objects that might hold challenge data.
+              // EA Web App typically stores it on _model, _data, or a direct reference.
+              const candidates = [
+                panelView._challenge,
+                panelView._sbcChallenge,
+                panelView.challenge,
+                panelView._model,
+                panelView._model?.challenge,
+                panelView._data,
+                panelView._data?.challenge,
+                panelView._viewModel,
+                panelView._viewModel?.challenge,
+                panelView._controller?._challenge,
+                panelView._controller?._model,
+                panelView._controller?._data,
+              ];
+              for (const candidate of candidates) {
+                if (!candidate || typeof candidate !== "object") continue;
+                const cId = candidate.challengeId ?? candidate.id;
+                const sId = candidate.setId;
+                if (cId != null && detail.challengeId == null) detail.challengeId = Number(cId);
+                if (sId != null && detail.setId == null) detail.setId = Number(sId);
+                if (detail.challengeId != null && detail.setId != null) break;
               }
-            } catch {
-              // ID extraction is best-effort
+              // Last resort: walk all own string-keyed properties one level deep
+              if (detail.challengeId == null || detail.setId == null) {
+                for (const key of Object.keys(panelView)) {
+                  const val = panelView[key];
+                  if (!val || typeof val !== "object") continue;
+                  if (detail.challengeId == null && val.challengeId != null) detail.challengeId = Number(val.challengeId);
+                  if (detail.setId == null && val.setId != null) detail.setId = Number(val.setId);
+                  if (detail.challengeId != null && detail.setId != null) break;
+                }
+              }
+            } catch (extractErr) {
+              console.warn("[R4F] Quick Builder ID extraction error:", extractErr);
             }
             console.log("[R4F] Quick Builder activated", detail);
             showNotification("Quick Builder: starting…", UINotificationType.POSITIVE);
