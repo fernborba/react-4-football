@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         React 4 Football
 // @namespace    http://tampermonkey.net/
-// @version      9.0.2
+// @version      9.0.3
 // @description  React UI for EA WebApp
 // @author       Fernando
 // @match        https://www.ea.com/*/ea-sports-fc/ultimate-team/web-app/*
@@ -12,7 +12,7 @@
 // @updateURL    https://raw.githubusercontent.com/fernborba/react-4-football/main/dist/react4football.meta.js
 // @require      https://unpkg.com/react@18/umd/react.production.min.js
 // @require      https://unpkg.com/react-dom@18/umd/react-dom.production.min.js
-// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v9.0.2
+// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v9.0.3
 // ==/UserScript==
 
 (function () {
@@ -51,7 +51,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     obs.observe(document.documentElement, { childList: true, subtree: true });
   }
 
-  const EXPECTED_BUNDLE_VERSION = "v9.0.2";
+  const EXPECTED_BUNDLE_VERSION = "v9.0.3";
   const startupState = {
     failed: false,
     reason: null,
@@ -607,6 +607,26 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     }
   }
 
+  /**
+   * Mount the R4F lock control at the end of EA's `.ut-button-group` so other
+   * extensions (e.g. SBC Monkey) can keep using the top of the row. Falls back
+   * to insertAfter(anchor) if no suitable group is found.
+   */
+  function appendR4fLockButtonToGroup(buttonRoot, anchorRoot) {
+    if (!buttonRoot || !anchorRoot) return;
+    const group =
+      anchorRoot.closest?.(".ut-button-group") ?? anchorRoot.parentNode;
+    if (
+      group &&
+      group.nodeType === 1 &&
+      group.classList?.contains?.("ut-button-group")
+    ) {
+      group.appendChild(buttonRoot);
+    } else {
+      insertAfter(buttonRoot, anchorRoot);
+    }
+  }
+
   // Helper function to update locked class on DOM elements by definitionId
   function updateLockedVisual(definitionId, isLocked) {
     const elements = document.querySelectorAll(`[data-definition-id="${definitionId}"]`);
@@ -647,7 +667,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
           button.init();
           button.setInteractionState(true);
           button.setText(label);
-          insertAfter(button.__root, this._btnBio.__root);
+          appendR4fLockButtonToGroup(button.__root, this._btnBio.__root);
 
           button.addTarget(this, () => {
             const current = this._r4fCurrentItem;
@@ -700,7 +720,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
           button.init();
           button.setInteractionState(true);
           button.setText(label);
-          insertAfter(button.__root, this._bioButton.__root);
+          appendR4fLockButtonToGroup(button.__root, this._bioButton.__root);
 
           button.addTarget(this, () => {
             const current = this._r4fCurrentItem;
