@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         React 4 Football
 // @namespace    http://tampermonkey.net/
-// @version      9.0.1
+// @version      9.0.2
 // @description  React UI for EA WebApp
 // @author       Fernando
 // @match        https://www.ea.com/*/ea-sports-fc/ultimate-team/web-app/*
@@ -12,7 +12,7 @@
 // @updateURL    https://raw.githubusercontent.com/fernborba/react-4-football/main/dist/react4football.meta.js
 // @require      https://unpkg.com/react@18/umd/react.production.min.js
 // @require      https://unpkg.com/react-dom@18/umd/react-dom.production.min.js
-// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v9.0.1
+// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v9.0.2
 // ==/UserScript==
 
 (function () {
@@ -51,7 +51,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     obs.observe(document.documentElement, { childList: true, subtree: true });
   }
 
-  const EXPECTED_BUNDLE_VERSION = "v9.0.1";
+  const EXPECTED_BUNDLE_VERSION = "v9.0.2";
   const startupState = {
     failed: false,
     reason: null,
@@ -635,6 +635,11 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
           return result;
         }
 
+        // Track current item so the (single) click handler always operates on
+        // the player currently displayed, not the one captured when the button
+        // was first created.
+        this._r4fCurrentItem = item;
+
         // Create lock/unlock button if not already present
         if (!this.lockUnlockButton && this._btnBio && this._btnBio.__root) {
           const label = isItemLocked(item) ? lockedLabel : unlockedLabel;
@@ -645,15 +650,17 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
           insertAfter(button.__root, this._btnBio.__root);
 
           button.addTarget(this, () => {
-            if (isItemLocked(item)) {
-              unlockItem(item);
+            const current = this._r4fCurrentItem;
+            if (!current) return;
+            if (isItemLocked(current)) {
+              unlockItem(current);
               button.setText(unlockedLabel);
-              updateLockedVisual(item.definitionId, false);
+              updateLockedVisual(current.definitionId, false);
               showNotification("Player unlocked", UINotificationType.POSITIVE);
             } else {
-              lockItem(item);
+              lockItem(current);
               button.setText(lockedLabel);
-              updateLockedVisual(item.definitionId, true);
+              updateLockedVisual(current.definitionId, true);
               showNotification("Player locked", UINotificationType.POSITIVE);
             }
           }, EventType.TAP);
@@ -681,6 +688,11 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
           return result;
         }
 
+        // Track current item so the (single) click handler always operates on
+        // the player currently displayed, not the one captured when the button
+        // was first created.
+        this._r4fCurrentItem = item;
+
         // Create lock/unlock button if not already present
         if (!this.lockUnlockButton && this._bioButton && this._bioButton.__root) {
           const label = isItemLocked(item) ? lockedLabel : unlockedLabel;
@@ -691,15 +703,17 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
           insertAfter(button.__root, this._bioButton.__root);
 
           button.addTarget(this, () => {
-            if (isItemLocked(item)) {
-              unlockItem(item);
+            const current = this._r4fCurrentItem;
+            if (!current) return;
+            if (isItemLocked(current)) {
+              unlockItem(current);
               button.setText(unlockedLabel);
-              updateLockedVisual(item.definitionId, false);
+              updateLockedVisual(current.definitionId, false);
               showNotification("Player unlocked", UINotificationType.POSITIVE);
             } else {
-              lockItem(item);
+              lockItem(current);
               button.setText(lockedLabel);
-              updateLockedVisual(item.definitionId, true);
+              updateLockedVisual(current.definitionId, true);
               showNotification("Player locked", UINotificationType.POSITIVE);
             }
           }, EventType.TAP);
