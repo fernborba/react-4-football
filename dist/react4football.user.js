@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         React 4 Football
 // @namespace    http://tampermonkey.net/
-// @version      9.0.4
+// @version      11.0.0
 // @description  React UI for EA WebApp
 // @author       Fernando
 // @match        https://www.ea.com/*/ea-sports-fc/ultimate-team/web-app/*
@@ -12,7 +12,7 @@
 // @updateURL    https://raw.githubusercontent.com/fernborba/react-4-football/main/dist/react4football.meta.js
 // @require      https://unpkg.com/react@18/umd/react.production.min.js
 // @require      https://unpkg.com/react-dom@18/umd/react-dom.production.min.js
-// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v9.0.4
+// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v11.0.0
 // ==/UserScript==
 
 (function () {
@@ -51,7 +51,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     obs.observe(document.documentElement, { childList: true, subtree: true });
   }
 
-  const EXPECTED_BUNDLE_VERSION = "v9.0.4";
+  const EXPECTED_BUNDLE_VERSION = "v11.0.0";
   const startupState = {
     failed: false,
     reason: null,
@@ -607,26 +607,6 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     }
   }
 
-  /**
-   * Mount the R4F lock control at the end of EA's `.ut-button-group` so other
-   * extensions (e.g. SBC Monkey) can keep using the top of the row. Falls back
-   * to insertAfter(anchor) if no suitable group is found.
-   */
-  function appendR4fLockButtonToGroup(buttonRoot, anchorRoot) {
-    if (!buttonRoot || !anchorRoot) return;
-    const group =
-      anchorRoot.closest?.(".ut-button-group") ?? anchorRoot.parentNode;
-    if (
-      group &&
-      group.nodeType === 1 &&
-      group.classList?.contains?.("ut-button-group")
-    ) {
-      group.appendChild(buttonRoot);
-    } else {
-      insertAfter(buttonRoot, anchorRoot);
-    }
-  }
-
   // Helper function to update locked class on DOM elements by definitionId
   function updateLockedVisual(definitionId, isLocked) {
     const elements = document.querySelectorAll(`[data-definition-id="${definitionId}"]`);
@@ -655,44 +635,32 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
           return result;
         }
 
-        // Track current item so the (single) click handler always operates on
-        // the player currently displayed, not the one captured when the button
-        // was first created.
-        this._r4fCurrentItem = item;
-
         // Create lock/unlock button if not already present
         if (!this.lockUnlockButton && this._btnBio && this._btnBio.__root) {
+          const label = isItemLocked(item) ? lockedLabel : unlockedLabel;
           const button = new UTGroupButtonControl();
           button.init();
           button.setInteractionState(true);
+          button.setText(label);
+          insertAfter(button.__root, this._btnBio.__root);
 
           button.addTarget(this, () => {
-            const current = this._r4fCurrentItem;
-            if (!current) return;
-            if (isItemLocked(current)) {
-              unlockItem(current);
+            if (isItemLocked(item)) {
+              unlockItem(item);
               button.setText(unlockedLabel);
-              updateLockedVisual(current.definitionId, false);
+              updateLockedVisual(item.definitionId, false);
               showNotification("Player unlocked", UINotificationType.POSITIVE);
             } else {
-              lockItem(current);
+              lockItem(item);
               button.setText(lockedLabel);
-              updateLockedVisual(current.definitionId, true);
+              updateLockedVisual(item.definitionId, true);
               showNotification("Player locked", UINotificationType.POSITIVE);
             }
           }, EventType.TAP);
 
           this.lockUnlockButton = button;
-        }
-
-        // Always (re)place our button at the END of the .ut-button-group and
-        // refresh the label. EA (and other extensions) can re-render the
-        // button group between setItem calls, which would otherwise leave our
-        // node at the top. appendChild on an already-mounted node MOVES it.
-        if (this.lockUnlockButton) {
-          const anchor =
-            (this._btnBio && this._btnBio.__root) || this.lockUnlockButton.__root;
-          appendR4fLockButtonToGroup(this.lockUnlockButton.__root, anchor);
+        } else if (this.lockUnlockButton) {
+          // Update button label if item changed
           const label = isItemLocked(item) ? lockedLabel : unlockedLabel;
           this.lockUnlockButton.setText(label);
         }
@@ -713,44 +681,32 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
           return result;
         }
 
-        // Track current item so the (single) click handler always operates on
-        // the player currently displayed, not the one captured when the button
-        // was first created.
-        this._r4fCurrentItem = item;
-
         // Create lock/unlock button if not already present
         if (!this.lockUnlockButton && this._bioButton && this._bioButton.__root) {
+          const label = isItemLocked(item) ? lockedLabel : unlockedLabel;
           const button = new UTGroupButtonControl();
           button.init();
           button.setInteractionState(true);
+          button.setText(label);
+          insertAfter(button.__root, this._bioButton.__root);
 
           button.addTarget(this, () => {
-            const current = this._r4fCurrentItem;
-            if (!current) return;
-            if (isItemLocked(current)) {
-              unlockItem(current);
+            if (isItemLocked(item)) {
+              unlockItem(item);
               button.setText(unlockedLabel);
-              updateLockedVisual(current.definitionId, false);
+              updateLockedVisual(item.definitionId, false);
               showNotification("Player unlocked", UINotificationType.POSITIVE);
             } else {
-              lockItem(current);
+              lockItem(item);
               button.setText(lockedLabel);
-              updateLockedVisual(current.definitionId, true);
+              updateLockedVisual(item.definitionId, true);
               showNotification("Player locked", UINotificationType.POSITIVE);
             }
           }, EventType.TAP);
 
           this.lockUnlockButton = button;
-        }
-
-        // Always (re)place our button at the END of the .ut-button-group and
-        // refresh the label. EA (and other extensions) can re-render the
-        // button group between render calls, which would otherwise leave our
-        // node at the top. appendChild on an already-mounted node MOVES it.
-        if (this.lockUnlockButton) {
-          const anchor =
-            (this._bioButton && this._bioButton.__root) || this.lockUnlockButton.__root;
-          appendR4fLockButtonToGroup(this.lockUnlockButton.__root, anchor);
+        } else if (this.lockUnlockButton) {
+          // Update button label if item changed
           const label = isItemLocked(item) ? lockedLabel : unlockedLabel;
           this.lockUnlockButton.setText(label);
         }
