@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         React 4 Football
 // @namespace    http://tampermonkey.net/
-// @version      11.0.23
+// @version      11.0.24
 // @description  React UI for EA WebApp
 // @author       Fernando
 // @match        https://www.ea.com/*/ea-sports-fc/ultimate-team/web-app/*
@@ -12,7 +12,7 @@
 // @updateURL    https://raw.githubusercontent.com/fernborba/react-4-football/main/dist/react4football.meta.js
 // @require      https://unpkg.com/react@18/umd/react.production.min.js
 // @require      https://unpkg.com/react-dom@18/umd/react-dom.production.min.js
-// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v11.0.23
+// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v11.0.24
 // ==/UserScript==
 
 (function () {
@@ -51,7 +51,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     obs.observe(document.documentElement, { childList: true, subtree: true });
   }
 
-  const EXPECTED_BUNDLE_VERSION = "v11.0.23";
+  const EXPECTED_BUNDLE_VERSION = "v11.0.24";
   const startupState = {
     failed: false,
     reason: null,
@@ -644,9 +644,8 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
   }
 
   function formatPriceK(n) {
-    if (n >= 1000000) return `${(n / 1000000).toFixed(1).replace(/\.0$/, "")}M`;
-    if (n >= 1000) return `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k`;
-    return String(n);
+    if (typeof n !== "number" || !Number.isFinite(n)) return "";
+    return Math.round(n).toLocaleString("de-DE");
   }
 
   function formatPriceLabel(cached) {
