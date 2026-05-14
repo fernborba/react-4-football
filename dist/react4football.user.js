@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         React 4 Football
 // @namespace    http://tampermonkey.net/
-// @version      11.0.19
+// @version      11.0.21
 // @description  React UI for EA WebApp
 // @author       Fernando
 // @match        https://www.ea.com/*/ea-sports-fc/ultimate-team/web-app/*
@@ -12,7 +12,7 @@
 // @updateURL    https://raw.githubusercontent.com/fernborba/react-4-football/main/dist/react4football.meta.js
 // @require      https://unpkg.com/react@18/umd/react.production.min.js
 // @require      https://unpkg.com/react-dom@18/umd/react-dom.production.min.js
-// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v11.0.19
+// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v11.0.21
 // ==/UserScript==
 
 (function () {
@@ -51,7 +51,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     obs.observe(document.documentElement, { childList: true, subtree: true });
   }
 
-  const EXPECTED_BUNDLE_VERSION = "v11.0.19";
+  const EXPECTED_BUNDLE_VERSION = "v11.0.21";
   const startupState = {
     failed: false,
     reason: null,
@@ -621,6 +621,12 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
 
   const EXCLUDE_CONFIG_KEY = "fcx.excludeConfig";
 
+  /** EA anti-automation / rate-limit responses: auto-disable unassigned price overlay. */
+  const UNASSIGNED_PRICE_AUTO_OFF_STATUSES = new Set([426, 429, 503, 512]);
+
+  /** Coalesce concurrent unassigned price fetches per definitionId (throttled path in bundle). */
+  const unassignedPriceInFlight = new Map();
+
   function loadExcludeConfig() {
     try {
       const stored = localStorage.getItem(EXCLUDE_CONFIG_KEY);
@@ -628,12 +634,13 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
         const parsed = JSON.parse(stored);
         return {
           priceCheckEnabled: parsed.priceCheckEnabled !== false,
+          priceCheckOnUnassignedEnabled: parsed.priceCheckOnUnassignedEnabled === true,
         };
       }
     } catch (e) {
       console.error("[R4F] Error reading exclude config:", e);
     }
-    return { priceCheckEnabled: true };
+    return { priceCheckEnabled: true, priceCheckOnUnassignedEnabled: false };
   }
 
   function formatPriceK(n) {
@@ -664,10 +671,19 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
 
   async function injectPlayerItemPrice(rootEl, item) {
     const config = loadExcludeConfig();
-    if (!config.priceCheckEnabled) {
+
+    function removePriceChrome() {
       const stale = rootEl.querySelector(".r4f-price-label");
       if (stale) stale.remove();
       rootEl.classList.remove("r4f-price-label-host");
+    }
+
+    if (!config.priceCheckEnabled) {
+      removePriceChrome();
+      return;
+    }
+    if (!config.priceCheckOnUnassignedEnabled) {
+      removePriceChrome();
       return;
     }
     if (!item || item.untradeable) return;
@@ -676,6 +692,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     if (definitionId == null) return;
 
     if (typeof window.R4F?.priceCache?.get !== "function") return;
+    if (typeof window.R4F?.priceProvider?.get !== "function") return;
 
     rootEl.classList.add("r4f-price-label-host");
 
@@ -694,44 +711,47 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
         return;
       }
 
-      if (typeof window.R4F?.market?.getMinBinPrice !== "function") {
-        label.textContent = "";
-        return;
-      }
-
-      const res = await window.R4F.market.getMinBinPrice(definitionId);
-      if (!res) {
-        label.textContent = "";
-        return;
-      }
-
-      if (res.ok) {
-        const text = res.minBin != null ? formatPriceK(res.minBin) : "Extinct";
-        label.textContent = text;
-        if (typeof window.R4F.priceCache.set === "function") {
-          const now = Date.now();
-          const cacheResult = res.minBin != null
-            ? {
-              status: "priced",
-              source: "ea-transfer-market",
-              definitionId,
-              lowestBin: res.minBin,
-              averageBin: null,
-              sampleSize: res.rawCount,
-              checkedAt: now,
+      let flight = unassignedPriceInFlight.get(definitionId);
+      if (!flight) {
+        flight = (async () => {
+          try {
+            const result = await window.R4F.priceProvider.get(definitionId);
+            if (
+              result.status === "error" &&
+              result.httpStatus !== undefined &&
+              UNASSIGNED_PRICE_AUTO_OFF_STATUSES.has(result.httpStatus)
+            ) {
+              if (typeof window.R4F.disablePriceCheckOnUnassigned === "function") {
+                window.R4F.disablePriceCheckOnUnassigned(result.httpStatus);
+              }
             }
-            : {
-              status: "not-found",
-              source: "ea-transfer-market",
-              definitionId,
-              checkedAt: now,
-            };
-          await window.R4F.priceCache.set(definitionId, cacheResult);
-        }
+            if (result.status === "priced" || result.status === "not-found") {
+              if (typeof window.R4F.priceCache.set === "function") {
+                await window.R4F.priceCache.set(definitionId, result);
+              }
+            }
+            return result;
+          } finally {
+            unassignedPriceInFlight.delete(definitionId);
+          }
+        })();
+        unassignedPriceInFlight.set(definitionId, flight);
+      }
+
+      const result = await flight;
+      if (result.status === "priced") {
+        label.textContent = formatPriceLabel(result);
+      } else if (result.status === "not-found") {
+        label.textContent = "Extinct";
+      } else if (result.status === "untradable") {
+        label.textContent = "Untradeable";
+      } else if (result.status === "error") {
+        label.textContent = "Error";
       } else {
         label.textContent = "—";
       }
     } catch (err) {
+      if (err && err.name === "AbortError") return;
       console.warn("[R4F] injectPlayerItemPrice failed:", err);
       label.textContent = "—";
     }
