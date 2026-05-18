@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         React 4 Football
 // @namespace    http://tampermonkey.net/
-// @version      11.0.26
+// @version      11.0.27
 // @description  React UI for EA WebApp
 // @author       Fernando
 // @match        https://www.ea.com/*/ea-sports-fc/ultimate-team/web-app/*
@@ -12,7 +12,7 @@
 // @updateURL    https://raw.githubusercontent.com/fernborba/react-4-football/main/dist/react4football.meta.js
 // @require      https://unpkg.com/react@18/umd/react.production.min.js
 // @require      https://unpkg.com/react-dom@18/umd/react-dom.production.min.js
-// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v11.0.26
+// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v11.0.27
 // ==/UserScript==
 
 (function () {
@@ -51,7 +51,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     obs.observe(document.documentElement, { childList: true, subtree: true });
   }
 
-  const EXPECTED_BUNDLE_VERSION = "v11.0.26";
+  const EXPECTED_BUNDLE_VERSION = "v11.0.27";
   const startupState = {
     failed: false,
     reason: null,
@@ -62,12 +62,16 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     if (typeof value !== "string") return;
     const sid = value.trim();
     if (!sid) return;
+    const changed = sid !== eaWindow.__fcxLastUTSID;
     eaWindow.__fcxLastUTSID = sid;
     window.__fcxLastUTSID = sid;
     try {
       sessionStorage.setItem("fcx.lastUTSID", sid);
     } catch {
       // Ignore storage errors (private mode/quota/etc)
+    }
+    if (changed) {
+      console.debug("[R4F] X-UT-SID refreshed (" + sid.length + " chars)");
     }
   }
 
@@ -112,7 +116,14 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
       const originalFetch = eaWindow.fetch;
       eaWindow.fetch = function (...args) {
         try {
+          const input = args[0];
           const init = args[1];
+          // Capture from a Request object (e.g. fetch(new Request(url, { headers })))
+          if (input && typeof Request !== "undefined" && input instanceof Request) {
+            const sidFromRequest = readUTSIDFromHeaders(input.headers);
+            if (sidFromRequest) cacheLastUTSID(sidFromRequest);
+          }
+          // Capture from init.headers (covers fetch(url, { headers: { "X-UT-SID": ... } }))
           const sidFromInit = readUTSIDFromHeaders(init?.headers);
           if (sidFromInit) {
             cacheLastUTSID(sidFromInit);
@@ -144,6 +155,30 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
   }
 
   installUTSIDCapture();
+
+  // Probe EA's session service directly every 30 s so that a rotated SID is
+  // picked up even when no fetch/XHR carrying the new SID has fired yet.
+  function installUTSIDSessionProbe() {
+    const PROBE_INTERVAL_MS = 30_000;
+
+    function probeSession() {
+      try {
+        const servicesApi = getEAServices();
+        if (!servicesApi?.Authentication) return;
+        const session = servicesApi.Authentication.getUtasSession();
+        if (session && typeof session.sid === "string" && session.sid) {
+          cacheLastUTSID(session.sid);
+        }
+      } catch {
+        // Ignore probe errors — EA services may not be ready yet.
+      }
+    }
+
+    probeSession();
+    setInterval(probeSession, PROBE_INTERVAL_MS);
+  }
+
+  installUTSIDSessionProbe();
 
   async function initDecisionLogging() {
     if (!window.React4Football?.decisionLogger) {
