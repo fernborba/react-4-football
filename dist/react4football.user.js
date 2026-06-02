@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         React 4 Football
 // @namespace    http://tampermonkey.net/
-// @version      11.0.34
+// @version      11.0.35
 // @description  React UI for EA WebApp
 // @author       Fernando
 // @match        https://www.ea.com/*/ea-sports-fc/ultimate-team/web-app/*
@@ -12,7 +12,7 @@
 // @updateURL    https://raw.githubusercontent.com/fernborba/react-4-football/main/dist/react4football.meta.js
 // @require      https://unpkg.com/react@18/umd/react.production.min.js
 // @require      https://unpkg.com/react-dom@18/umd/react-dom.production.min.js
-// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v11.0.34
+// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v11.0.35
 // ==/UserScript==
 
 (function () {
@@ -51,7 +51,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     obs.observe(document.documentElement, { childList: true, subtree: true });
   }
 
-  const EXPECTED_BUNDLE_VERSION = "v11.0.34";
+  const EXPECTED_BUNDLE_VERSION = "v11.0.35";
   const startupState = {
     failed: false,
     reason: null,
@@ -791,6 +791,82 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     }
   }
 
+  // =====================================================
+  // Quick Buy helpers
+  // =====================================================
+
+  function tryReadPaletoolsPrice(item) {
+    const el = document.querySelector(
+      `[data-definition-id="${item.definitionId}"] .r4f-price-label`
+    );
+    if (el && el.textContent && /^\d[\d,.]*$/.test(el.textContent.trim())) {
+      return parseInt(el.textContent.replace(/[^\d]/g, ""), 10);
+    }
+    return item.lastSalePrice > 0 ? item.lastSalePrice : null;
+  }
+
+  function injectQuickBuyRow(panel, item) {
+    if (panel._r4fQuickBuyRow) return;
+
+    const row = document.createElement("div");
+    row.className = "r4f-quick-buy-row";
+
+    const input = document.createElement("input");
+    input.type = "number";
+    input.className = "r4f-quick-buy-input";
+    input.placeholder = "Max Buy Now";
+    input.min = "150";
+
+    const copyBnpBtn = document.createElement("button");
+    copyBnpBtn.textContent = "Copy BNP";
+    copyBnpBtn.className = "r4f-copy-bnp-btn";
+    copyBnpBtn.addEventListener("click", () => {
+      const bnpLabel = Array.from(
+        document.querySelectorAll('.ut-quick-list-panel-view .spinnerLabel')
+      ).find(el => el.textContent.trim() === 'Buy Now Price:');
+      const bnpInput = bnpLabel
+        ? bnpLabel.closest('.panelActionRow').querySelector('input.ut-number-input-control')
+        : null;
+      if (bnpInput && bnpInput.value) {
+        input.value = bnpInput.value.replace(/[^\d]/g, '');
+      }
+    });
+
+    const btn = new UTGroupButtonControl();
+    btn.init();
+    btn.setText("Quick Buy");
+
+    btn.addTarget(panel, async () => {
+      const maxBuyNow = parseInt(input.value, 10);
+      if (!maxBuyNow || maxBuyNow < 150) return;
+      btn.setInteractionState(false);
+      btn.setText("Searching…");
+      try {
+        const defId = item.assetId ?? item.definitionId;
+        const result = await searchMarket({ marketType: "player", definitionId: defId, maxb: maxBuyNow });
+        const listing = result.withBin[0];
+        if (!listing) {
+          showNotification(`No listing ≤ ${maxBuyNow}`, UINotificationType.NEGATIVE);
+        } else {
+          await storeApiPut(`/trade/${listing.tradeId}/bid`, { bid: listing.buyNowPrice });
+          showNotification(`Bought for ${listing.buyNowPrice} ✓`, UINotificationType.POSITIVE);
+        }
+      } catch (e) {
+        showNotification("Quick Buy failed: " + e.message, UINotificationType.NEGATIVE);
+      } finally {
+        btn.setInteractionState(true);
+        btn.setText("Quick Buy");
+      }
+    }, EventType.TAP);
+
+    row.appendChild(copyBnpBtn);
+    row.appendChild(input);
+    row.appendChild(btn.__root);
+    panel.lockUnlockButton.__root.parentNode.insertBefore(row, panel.lockUnlockButton.__root);
+    panel._r4fQuickBuyRow = row;
+    panel._r4fQuickBuyInput = input;
+  }
+
   // Override EA's UI components to inject Lock button
   function initPlayerLockOverrides() {
     const lockedLabel = "Unlock Player React FC";
@@ -837,6 +913,14 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
           this.lockUnlockButton.setText(label);
         }
 
+        if (this.lockUnlockButton) {
+          injectQuickBuyRow(this, item);
+          const suggested = tryReadPaletoolsPrice(item);
+          if (suggested && this._r4fQuickBuyInput) {
+            this._r4fQuickBuyInput.value = String(suggested);
+          }
+        }
+
         return result;
       };
       console.log("[R4F] UTSlotActionPanelView override applied");
@@ -881,6 +965,14 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
           // Update button label if item changed
           const label = isItemLocked(item) ? lockedLabel : unlockedLabel;
           this.lockUnlockButton.setText(label);
+        }
+
+        if (this.lockUnlockButton) {
+          injectQuickBuyRow(this, item);
+          const suggested = tryReadPaletoolsPrice(item);
+          if (suggested && this._r4fQuickBuyInput) {
+            this._r4fQuickBuyInput.value = String(suggested);
+          }
         }
 
         return result;
