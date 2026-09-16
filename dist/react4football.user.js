@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         React 4 Football
 // @namespace    http://tampermonkey.net/
-// @version      11.0.78
+// @version      11.0.79
 // @description  React UI for EA WebApp
 // @author       Fernando
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app/*
@@ -14,7 +14,7 @@
 // @updateURL    https://raw.githubusercontent.com/fernborba/react-4-football/main/dist/react4football.meta.js
 // @require      https://unpkg.com/react@18/umd/react.production.min.js
 // @require      https://unpkg.com/react-dom@18/umd/react-dom.production.min.js
-// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v11.0.78
+// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v11.0.79
 // ==/UserScript==
 
 (function () {
@@ -38,6 +38,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
 .r4f-tab-page-version{font-size:.82rem;letter-spacing:.08em;text-transform:uppercase;color:#ffffffbf}
 .r4f-panel-inline{position:static;width:100%;max-height:none;border-radius:18px;box-shadow:none;border-color:#ffffff14;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
 .r4f-panel-inline:after{content:none}
+.r4f-fallback-panel{position:fixed;z-index:2147482000;overflow-y:auto;background:#191820;box-shadow:inset 0 0 0 1px rgba(255,255,255,.06)}
 @media screen and (max-width:720px){.r4f-tab-page{padding:12px 10px 20px}.r4f-panel-inline{grid-template-columns:minmax(0,1fr)}}
 `;
     document.head.appendChild(tabStyleSheet);
@@ -53,7 +54,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     obs.observe(document.documentElement, { childList: true, subtree: true });
   }
 
-  const EXPECTED_BUNDLE_VERSION = "v11.0.78";
+  const EXPECTED_BUNDLE_VERSION = "v11.0.79";
   const startupState = {
     failed: false,
     reason: null,
@@ -222,6 +223,14 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     if (startupState.failed) return false;
     startupState.failed = true;
     startupState.reason = message;
+    showNotification(message, getNegativeNotificationType());
+    return false;
+  }
+
+  // Degraded startup: a subsystem that needs EA internals is unavailable, but the
+  // R4F tab itself must still load. Never sets startupState.failed.
+  function warnDegraded(message) {
+    console.warn("[R4F]", message);
     showNotification(message, getNegativeNotificationType());
     return false;
   }
@@ -520,6 +529,134 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     return true;
   }
 
+  // ---- DOM fallback tab ----
+  // EA renames/hides its UT* globals on each game cycle, which breaks the prototype
+  // patch above. The tab bar markup (nav.ut-tab-bar > button.ut-tab-bar-item) has been
+  // stable across cycles, so fall back to appending our own tab button and mounting
+  // React into a fixed panel positioned over EA's content area.
+
+  const R4F_FALLBACK_TAB_CLASS = "r4f-fallback-tab-item";
+  const R4F_CONTENT_SELECTOR = ".ut-navigation-container-view--content";
+
+  let fallbackPanelState = null;
+
+  function positionFallbackPanel(panel) {
+    const rect = document.querySelector(R4F_CONTENT_SELECTOR)?.getBoundingClientRect();
+    if (!rect || rect.width === 0 || rect.height === 0) {
+      // EA's content area is not measurable yet — sit below the nav bar.
+      panel.style.top = "64px";
+      panel.style.left = "0px";
+      panel.style.width = "100vw";
+      panel.style.height = "calc(100vh - 64px)";
+      return;
+    }
+    panel.style.top = `${rect.top}px`;
+    panel.style.left = `${rect.left}px`;
+    panel.style.width = `${rect.width}px`;
+    panel.style.height = `${rect.height}px`;
+  }
+
+  function ensureFallbackPanel() {
+    if (fallbackPanelState?.panel?.isConnected) return fallbackPanelState;
+
+    if (typeof fallbackPanelState?.unmount === "function") {
+      try {
+        fallbackPanelState.unmount();
+      } catch (error) {
+        console.warn("[R4F] failed to unmount detached fallback panel:", error);
+      }
+    }
+
+    const panel = document.createElement("div");
+    panel.id = "r4f-fallback-panel";
+    panel.classList.add("r4f-tab-view", "r4f-fallback-panel");
+    panel.style.display = "none";
+
+    const content = document.createElement("div");
+    content.classList.add("r4f-native-tab-content");
+    panel.appendChild(content);
+
+    const mountPoint = document.createElement("div");
+    mountPoint.id = "r4f-fallback-tab-root";
+    content.appendChild(mountPoint);
+
+    document.body.appendChild(panel);
+    fallbackPanelState = { panel, mountPoint, unmount: null };
+    return fallbackPanelState;
+  }
+
+  function hideFallbackPanel() {
+    if (fallbackPanelState?.panel) {
+      fallbackPanelState.panel.style.display = "none";
+    }
+  }
+
+  function showFallbackPanel() {
+    const state = ensureFallbackPanel();
+    positionFallbackPanel(state.panel);
+    state.panel.style.display = "block";
+
+    if (state.unmount) return;
+    if (!window.React4Football || typeof window.React4Football.mount !== "function") {
+      console.warn("[R4F] React bundle mount() is unavailable while opening the fallback tab");
+      return;
+    }
+    try {
+      state.unmount = window.React4Football.mount(state.mountPoint);
+    } catch (error) {
+      console.warn("[R4F] failed to mount React inside the fallback panel:", error);
+    }
+  }
+
+  function installDomFallbackTab() {
+    const tabBar = document.querySelector("nav.ut-tab-bar");
+    if (!tabBar) return false;
+    if (tabBar.querySelector(`.${R4F_FALLBACK_TAB_CLASS}`)) return true;
+
+    const button = document.createElement("button");
+    button.classList.add("ut-tab-bar-item", "icon-settings", R4F_FALLBACK_TAB_CLASS);
+    const label = document.createElement("span");
+    label.textContent = R4F_TAB_TITLE;
+    button.appendChild(label);
+
+    button.addEventListener("click", event => {
+      event.preventDefault();
+      event.stopPropagation();
+      for (const item of tabBar.querySelectorAll(".ut-tab-bar-item")) {
+        item.classList.remove("selected");
+      }
+      button.classList.add("selected");
+      showFallbackPanel();
+    });
+
+    // Selecting any EA tab hands the content area back to the Web App.
+    tabBar.addEventListener("click", event => {
+      const item = event.target.closest?.(".ut-tab-bar-item");
+      if (!item || item === button) return;
+      button.classList.remove("selected");
+      hideFallbackPanel();
+    }, true);
+
+    tabBar.appendChild(button);
+    return true;
+  }
+
+  function keepFallbackTabInstalled() {
+    const RECHECK_INTERVAL_MS = 2_000;
+    setInterval(() => {
+      installDomFallbackTab();
+      if (fallbackPanelState?.panel?.style.display === "block") {
+        positionFallbackPanel(fallbackPanelState.panel);
+      }
+    }, RECHECK_INTERVAL_MS);
+
+    window.addEventListener("resize", () => {
+      if (fallbackPanelState?.panel?.style.display === "block") {
+        positionFallbackPanel(fallbackPanelState.panel);
+      }
+    });
+  }
+
   function isBundleReadyForNativeTab() {
     if (!window.React4Football || typeof window.React4Football.mount !== "function") {
       return false;
@@ -541,6 +678,8 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
   function ensureNativeTabInjection() {
     const RETRY_INTERVAL_MS = 500;
     const WARN_EVERY_ATTEMPTS = 60;
+    // Give EA's own boot a few seconds before deciding its classes are gone for good.
+    const FALLBACK_AFTER_ATTEMPTS = 20;
     let attempts = 0;
     let injected = false;
 
@@ -555,6 +694,14 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
 
       const missingDeps = getMissingR4FTabDependencies();
       if (missingDeps.length > 0) {
+        if (attempts >= FALLBACK_AFTER_ATTEMPTS && installDomFallbackTab()) {
+          injected = true;
+          keepFallbackTabInstalled();
+          console.warn(
+            `[R4F] EA tab classes unavailable (${missingDeps.join(", ")}); installed DOM fallback tab`
+          );
+          return;
+        }
         if (attempts % WARN_EVERY_ATTEMPTS === 0) {
           console.warn(`[R4F] waiting for native tab dependencies: ${missingDeps.join(", ")}`);
         }
@@ -1456,7 +1603,10 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
       } else if (attempts < maxAttempts) {
         setTimeout(check, 500);
       } else {
-        failStartup("EA Web App session not ready yet. Refresh and try again.");
+        // Degraded only: these extras need EA internals, the R4F tab does not.
+        warnDegraded(
+          "EA Web App internals unavailable — player lock, Quick Builder button and metadata bridge are off. The R4F tab still works."
+        );
       }
     };
     check();
@@ -1531,7 +1681,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
   // Store API - Pack Opening
   // =====================================================
 
-  const API_BASE = "https://utas.mob.v5.prd.futc-ext.gcp.ea.com/ut/game/fc26";
+  const API_BASE = "https://utas.mob.v1.prd.futc-ext.gcp.ea.com/ut/game/fc27";
 
   function getSelectedPersona() {
     try {
