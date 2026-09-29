@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         React 4 Football
 // @namespace    http://tampermonkey.net/
-// @version      11.0.102
+// @version      11.0.110
 // @description  React UI for EA WebApp
 // @author       Fernando
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app/*
@@ -14,7 +14,7 @@
 // @updateURL    https://raw.githubusercontent.com/fernborba/react-4-football/main/dist/react4football.meta.js
 // @require      https://unpkg.com/react@18/umd/react.production.min.js
 // @require      https://unpkg.com/react-dom@18/umd/react-dom.production.min.js
-// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v11.0.102
+// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v11.0.110
 // ==/UserScript==
 
 (function () {
@@ -54,7 +54,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     obs.observe(document.documentElement, { childList: true, subtree: true });
   }
 
-  const EXPECTED_BUNDLE_VERSION = "v11.0.102";
+  const EXPECTED_BUNDLE_VERSION = "v11.0.110";
   const startupState = {
     failed: false,
     reason: null,
@@ -1016,6 +1016,98 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     panel._r4fQuickBuyInput = input;
   }
 
+  // =====================================================
+  // Search V2 — Add to Queue (Player Details)
+  // =====================================================
+
+  const PLAYER_DETAILS_QUEUE_BUY_NOW = 600;
+
+  function readPlayerDetailsDisplayName() {
+    const active =
+      document.querySelector(".DetailView .tns-slide-active .name.main-view") ||
+      document.querySelector(".DetailView .tns-item:not([aria-hidden='true']) .name.main-view") ||
+      document.querySelector(".DetailView .name.main-view");
+    return active?.textContent?.trim() || "";
+  }
+
+  function buildSearchV2QueueInputFromItem(item) {
+    const staticData = typeof item.getStaticData === "function" ? item.getStaticData() : null;
+    const meta = item._metaData || staticData || {};
+    return {
+      id: item.definitionId ?? item.id,
+      definitionId: item.definitionId,
+      assetId: item.assetId ?? item.definitionId,
+      resourceId: item.resourceId ?? item.definitionId,
+      rating: item.rating,
+      rareflag: item.rareflag,
+      nation: item.nation,
+      leagueId: item.leagueId,
+      teamid: item.teamId ?? item.teamid,
+      preferredPosition: item.preferredPosition,
+      guidAssetId: item.guidAssetId,
+      commonName: meta.commonName || item.commonName,
+      firstName: meta.firstName || item.firstName,
+      lastName: meta.lastName || item.lastName,
+      name: item.name,
+      displayNameFallback: readPlayerDetailsDisplayName(),
+      buyNowPrice: PLAYER_DETAILS_QUEUE_BUY_NOW,
+    };
+  }
+
+  function enqueuePlayerDetailsToSearchV2(item) {
+    window.R4F = window.R4F || {};
+    window.R4F.searchV2 = window.R4F.searchV2 || { pending: [], addToQueue: null };
+    if (!Array.isArray(window.R4F.searchV2.pending)) {
+      window.R4F.searchV2.pending = [];
+    }
+
+    const input = buildSearchV2QueueInputFromItem(item);
+    const assetId = Number(input.assetId);
+    if (!Number.isFinite(assetId) || assetId <= 0) {
+      showNotification("Could not add player to Search V2 queue", UINotificationType.NEGATIVE);
+      return false;
+    }
+
+    if (typeof window.R4F.searchV2.addToQueue === "function") {
+      const ok = window.R4F.searchV2.addToQueue(input);
+      if (!ok) {
+        showNotification("Could not add player to Search V2 queue", UINotificationType.NEGATIVE);
+        return false;
+      }
+      showNotification("Added to Search V2 queue", UINotificationType.POSITIVE);
+      return true;
+    }
+
+    window.R4F.searchV2.pending.push(input);
+    showNotification("Added to Search V2 queue", UINotificationType.POSITIVE);
+    return true;
+  }
+
+  function injectAddToQueueButton(panel, item) {
+    panel._r4fAddToQueueItem = item;
+
+    if (panel._r4fAddToQueueButton) {
+      return;
+    }
+
+    const lockRoot = panel.lockUnlockButton?.__root;
+    const bioRoot = panel._btnBio?.__root || panel._bioButton?.__root;
+    const anchor = lockRoot || bioRoot;
+    if (!anchor || !anchor.parentNode) return;
+
+    const button = new UTGroupButtonControl();
+    button.init();
+    button.setInteractionState(true);
+    button.setText("Add to Queue");
+    insertAfter(button.__root, lockRoot || bioRoot);
+
+    button.addTarget(panel, () => {
+      enqueuePlayerDetailsToSearchV2(panel._r4fAddToQueueItem || item);
+    }, EventType.TAP);
+
+    panel._r4fAddToQueueButton = button;
+  }
+
   // Override EA's UI components to inject Lock button
   function initPlayerLockOverrides() {
     const lockedLabel = "Unlock Player React FC";
@@ -1068,6 +1160,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
           if (suggested && this._r4fQuickBuyInput) {
             this._r4fQuickBuyInput.value = String(suggested);
           }
+          injectAddToQueueButton(this, item);
         }
 
         return result;
@@ -1122,6 +1215,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
           if (suggested && this._r4fQuickBuyInput) {
             this._r4fQuickBuyInput.value = String(suggested);
           }
+          injectAddToQueueButton(this, item);
         }
 
         return result;
