@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         React 4 Football
 // @namespace    http://tampermonkey.net/
-// @version      12.0.0
+// @version      12.0.1
 // @description  React UI for EA WebApp
 // @author       Fernando
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app/*
@@ -14,7 +14,7 @@
 // @updateURL    https://raw.githubusercontent.com/fernborba/react-4-football/main/dist/react4football.meta.js
 // @require      https://unpkg.com/react@18/umd/react.production.min.js
 // @require      https://unpkg.com/react-dom@18/umd/react-dom.production.min.js
-// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v12.0.0
+// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v12.0.1
 // ==/UserScript==
 
 (function () {
@@ -54,7 +54,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     obs.observe(document.documentElement, { childList: true, subtree: true });
   }
 
-  const EXPECTED_BUNDLE_VERSION = "v12.0.0";
+  const EXPECTED_BUNDLE_VERSION = "v12.0.1";
   const startupState = {
     failed: false,
     reason: null,
@@ -1017,10 +1017,21 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
   }
 
   // =====================================================
-  // Search V2 — Add to Queue (Player Details)
+  // Search V2 — Add to Queue (Player Details + Search Results)
   // =====================================================
 
   const PLAYER_DETAILS_QUEUE_BUY_NOW = 600;
+
+  function isQueueablePlayerItem(item) {
+    return !!(
+      item
+      && !(item.loans > -1)
+      && item.isPlayer
+      && item.isPlayer()
+      && item.id
+      && !(item.isTimeLimited && item.isTimeLimited())
+    );
+  }
 
   function readPlayerDetailsDisplayName() {
     const active =
@@ -1083,6 +1094,20 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     return true;
   }
 
+  function getActionPanelRoot(panel) {
+    return panel.__root
+      || (typeof panel.getRootElement === "function" ? panel.getRootElement() : null)
+      || panel._rootElement
+      || null;
+  }
+
+  function getActionPanelButtonGroup(panel) {
+    if (panel.__itemActions) return panel.__itemActions;
+    const root = getActionPanelRoot(panel);
+    if (!root || typeof root.querySelector !== "function") return null;
+    return root.querySelector(".ut-button-group");
+  }
+
   function injectAddToQueueButton(panel, item) {
     panel._r4fAddToQueueItem = item;
 
@@ -1093,13 +1118,18 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     const lockRoot = panel.lockUnlockButton?.__root;
     const bioRoot = panel._btnBio?.__root || panel._bioButton?.__root;
     const anchor = lockRoot || bioRoot;
-    if (!anchor || !anchor.parentNode) return;
+    const buttonGroup = getActionPanelButtonGroup(panel);
+    if ((!anchor || !anchor.parentNode) && !buttonGroup) return;
 
     const button = new UTGroupButtonControl();
     button.init();
     button.setInteractionState(true);
     button.setText("Add to Queue");
-    insertAfter(button.__root, lockRoot || bioRoot);
+    if (anchor?.parentNode) {
+      insertAfter(button.__root, lockRoot || bioRoot);
+    } else {
+      buttonGroup.appendChild(button.__root);
+    }
 
     button.addTarget(panel, () => {
       enqueuePlayerDetailsToSearchV2(panel._r4fAddToQueueItem || item);
@@ -1120,7 +1150,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
         const result = originalSetItem.call(this, item, t);
 
         // Skip if not a valid player item
-        if (!item || item.loans > -1 || !item.isPlayer || !item.isPlayer() || !item.id || item.isTimeLimited && item.isTimeLimited()) {
+        if (!isQueueablePlayerItem(item)) {
           return result;
         }
 
@@ -1175,7 +1205,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
         const result = originalRender.call(this, item, t, i, o, n, r, s);
 
         // Skip if not a valid player item
-        if (!item || item.loans > -1 || !item.isPlayer || !item.isPlayer() || !item.id || item.isTimeLimited && item.isTimeLimited()) {
+        if (!isQueueablePlayerItem(item)) {
           return result;
         }
 
@@ -1221,6 +1251,24 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
         return result;
       };
       console.log("[R4F] UTDefaultActionPanelView override applied");
+    }
+
+    // Transfer Market Search Results (and other auction detail panels)
+    const AuctionActionPanelView =
+      typeof UTAuctionActionPanelView !== "undefined"
+        ? UTAuctionActionPanelView
+        : eaWindow.UTAuctionActionPanelView;
+    if (AuctionActionPanelView?.prototype?.render) {
+      const originalAuctionRender = AuctionActionPanelView.prototype.render;
+      AuctionActionPanelView.prototype.render = function (item, t) {
+        const result = originalAuctionRender.call(this, item, t);
+        if (!isQueueablePlayerItem(item)) {
+          return result;
+        }
+        injectAddToQueueButton(this, item);
+        return result;
+      };
+      console.log("[R4F] UTAuctionActionPanelView override applied");
     }
 
     // Override UTPlayerItemView.prototype.renderItem for visual feedback
