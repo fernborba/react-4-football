@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         React 4 Football
 // @namespace    http://tampermonkey.net/
-// @version      12.3.12
+// @version      12.3.13
 // @description  React UI for EA WebApp
 // @author       Fernando
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app/*
@@ -14,7 +14,7 @@
 // @updateURL    https://raw.githubusercontent.com/fernborba/react-4-football/main/dist/react4football.meta.js
 // @require      https://unpkg.com/react@18/umd/react.production.min.js
 // @require      https://unpkg.com/react-dom@18/umd/react-dom.production.min.js
-// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v12.3.12
+// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v12.3.13
 // ==/UserScript==
 
 (function () {
@@ -54,7 +54,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     obs.observe(document.documentElement, { childList: true, subtree: true });
   }
 
-  const EXPECTED_BUNDLE_VERSION = "v12.3.12";
+  const EXPECTED_BUNDLE_VERSION = "v12.3.13";
   const startupState = {
     failed: false,
     reason: null,
@@ -1065,32 +1065,41 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     };
   }
 
-  function enqueuePlayerDetailsToSearchV2(item) {
+  function enqueuePlayerDetailsToSearchV2(item, options) {
     window.R4F = window.R4F || {};
     window.R4F.searchV2 = window.R4F.searchV2 || { pending: [], addToQueue: null };
     if (!Array.isArray(window.R4F.searchV2.pending)) {
       window.R4F.searchV2.pending = [];
     }
 
+    const silent = !!(options && options.silent);
     const input = buildSearchV2QueueInputFromItem(item);
     const assetId = Number(input.assetId);
     if (!Number.isFinite(assetId) || assetId <= 0) {
-      showNotification("Could not add player to Search V2 queue", UINotificationType.NEGATIVE);
+      if (!silent) {
+        showNotification("Could not add player to Search V2 queue", UINotificationType.NEGATIVE);
+      }
       return false;
     }
 
     if (typeof window.R4F.searchV2.addToQueue === "function") {
       const ok = window.R4F.searchV2.addToQueue(input);
       if (!ok) {
-        showNotification("Could not add player to Search V2 queue", UINotificationType.NEGATIVE);
+        if (!silent) {
+          showNotification("Could not add player to Search V2 queue", UINotificationType.NEGATIVE);
+        }
         return false;
       }
-      showNotification("Added to Search V2 queue", UINotificationType.POSITIVE);
+      if (!silent) {
+        showNotification("Added to Search V2 queue", UINotificationType.POSITIVE);
+      }
       return true;
     }
 
     window.R4F.searchV2.pending.push(input);
-    showNotification("Added to Search V2 queue", UINotificationType.POSITIVE);
+    if (!silent) {
+      showNotification("Added to Search V2 queue", UINotificationType.POSITIVE);
+    }
     return true;
   }
 
@@ -1300,9 +1309,226 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
       || (typeof UTSBCSquadDetailPanelView !== "undefined" ? UTSBCSquadDetailPanelView : null);
   }
 
+  function isConceptSquadItem(item) {
+    if (!item || typeof item !== "object") return false;
+    if (item.concept === true || item.dream === true) return true;
+    if (item.itemType === "concept" || item.type === "concept") return true;
+    if (item.itemData && (item.itemData.dream === true || item.itemData.concept === true)) return true;
+    try {
+      if (typeof item.isConcept === "function" && item.isConcept()) return true;
+    } catch (_) {}
+    try {
+      if (typeof item.isDream === "function" && item.isDream()) return true;
+    } catch (_) {}
+    return false;
+  }
+
+  function conceptItemFromEntry(entry) {
+    if (!entry || typeof entry !== "object") return null;
+    const candidates = [entry, entry.item, entry._item, entry.player, entry._player];
+    for (const item of candidates) {
+      if (!isConceptSquadItem(item)) continue;
+      const assetId = Number(item.assetId ?? item.definitionId ?? item.resourceId ?? item.id);
+      if (!Number.isFinite(assetId) || assetId <= 0) continue;
+      return item;
+    }
+    const data = entry.itemData;
+    if (data && (data.dream === true || data.concept === true)) {
+      const assetId = Number(data.assetId ?? data.resourceId);
+      if (Number.isFinite(assetId) && assetId > 0 && data.itemType !== "manager") return data;
+    }
+    return null;
+  }
+
+  function squadPlayerLists(squad) {
+    const lists = [];
+    if (!squad || typeof squad !== "object") return lists;
+    for (const name of ["getPlayers", "getFieldPlayers", "getSubPlayers", "getReservePlayers"]) {
+      if (typeof squad[name] !== "function") continue;
+      try {
+        const list = squad[name]();
+        if (Array.isArray(list)) lists.push(list);
+      } catch (_) {}
+    }
+    if (Array.isArray(squad._players)) lists.push(squad._players);
+    if (Array.isArray(squad.players)) lists.push(squad.players);
+    return lists;
+  }
+
+  function readPanelChallengeId(panelView) {
+    try {
+      const candidates = [
+        panelView?._challenge,
+        panelView?.challenge,
+        panelView?._controller?._challenge,
+        panelView?._controller?.challenge,
+      ];
+      for (const candidate of candidates) {
+        if (!candidate || typeof candidate !== "object") continue;
+        const challengeId = candidate.challengeId ?? candidate.id;
+        if (challengeId != null && Number.isFinite(Number(challengeId))) return Number(challengeId);
+      }
+    } catch (_) {}
+    return r4fSbcContext.lastChallengeId;
+  }
+
+  function conceptsOnNode(node) {
+    const items = [];
+    if (!node || typeof node !== "object") return items;
+    const holders = [node];
+    try {
+      if (node.squad) holders.push(node.squad);
+      if (node._squad) holders.push(node._squad);
+      if (typeof node.getSquad === "function") holders.push(node.getSquad());
+    } catch (_) {}
+    for (const holder of holders) {
+      for (const list of squadPlayerLists(holder)) {
+        for (const entry of list) {
+          const item = conceptItemFromEntry(entry);
+          if (item) items.push(item);
+        }
+      }
+    }
+    return items;
+  }
+
+  function collectLiveConceptItems(panelView) {
+    const seen = new Set();
+    const queue = [];
+    const push = (value) => {
+      if (value && typeof value === "object" && !value.nodeType && !seen.has(value)) {
+        queue.push(value);
+      }
+    };
+
+    push(panelView);
+    push(panelView?._controller);
+    try {
+      if (typeof panelView?.getController === "function") push(panelView.getController());
+    } catch (_) {}
+    try {
+      const getApp =
+        (typeof getAppMain !== "undefined" ? getAppMain : null) ||
+        (eaWindow && typeof eaWindow.getAppMain === "function" ? eaWindow.getAppMain : null);
+      const current = getApp?.()
+        ?.getRootViewController()
+        ?.getPresentedViewController()
+        ?.getCurrentViewController();
+      push(current);
+      if (typeof current?.getCurrentController === "function") push(current.getCurrentController());
+      const children = current?.childViewControllers;
+      if (Array.isArray(children)) children.forEach(push);
+    } catch (err) {
+      console.warn("[R4F] Queue Concepts view lookup failed:", err);
+    }
+
+    const linkKey = /^(?:_?challenge|_?sbcChallenge|_?squad|_?controller|_?leftController|_?rightController|_?viewModel|_?model|_?data)$/i;
+    while (queue.length && seen.size < 80) {
+      const node = queue.shift();
+      if (!node || seen.has(node)) continue;
+      seen.add(node);
+
+      const found = conceptsOnNode(node);
+      if (found.length) return found;
+
+      let keys = [];
+      try {
+        keys = Object.keys(node);
+      } catch (_) {
+        continue;
+      }
+      for (const key of keys) {
+        if (key !== "childViewControllers" && !linkKey.test(key)) continue;
+        let val;
+        try {
+          val = node[key];
+        } catch (_) {
+          continue;
+        }
+        if (Array.isArray(val)) val.forEach(push);
+        else push(val);
+      }
+    }
+    return [];
+  }
+
+  function collectCachedConceptItems(panelView) {
+    const cached = r4fSbcContext.lastSquad;
+    if (!cached || !Array.isArray(cached.players)) return [];
+    const wantedId = readPanelChallengeId(panelView);
+    if (
+      wantedId != null &&
+      cached.challengeId != null &&
+      Number(wantedId) !== Number(cached.challengeId)
+    ) {
+      return [];
+    }
+
+    const items = [];
+    for (const slot of cached.players) {
+      const data = slot?.itemData;
+      if (!data || (data.dream !== true && data.concept !== true)) continue;
+      if (data.itemType && data.itemType !== "player") continue;
+      const assetId = Number(data.assetId ?? data.resourceId);
+      if (!Number.isFinite(assetId) || assetId <= 0) continue;
+      items.push(data);
+    }
+    return items;
+  }
+
+  function addConceptPlayersToQueue(panelView) {
+    const live = collectLiveConceptItems(panelView);
+    const items = live.length ? live : collectCachedConceptItems(panelView);
+    console.log("[R4F] Queue Concepts", {
+      count: items.length,
+      source: live.length ? "squad" : items.length ? "cached-squad" : "none",
+    });
+
+    if (!items.length) {
+      showNotification("No concept players in this squad", getNegativeNotificationType());
+      return;
+    }
+
+    const seen = new Set();
+    let added = 0;
+    for (const item of items) {
+      const input = buildSearchV2QueueInputFromItem(item);
+      const key = Number(input.resourceId || input.assetId);
+      if (!Number.isFinite(key) || key <= 0 || seen.has(key)) continue;
+      seen.add(key);
+      if (enqueuePlayerDetailsToSearchV2(item, { silent: true })) added += 1;
+    }
+
+    if (!added) {
+      showNotification("Could not add concept players to Search V2 queue", getNegativeNotificationType());
+      return;
+    }
+
+    const label = added === 1 ? "1 concept player" : `${added} concept players`;
+    showNotification(`Added ${label} to Search V2 queue`, UINotificationType.POSITIVE);
+  }
+
+  function createQueueConceptsButton(panelView) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.setAttribute("data-r4f-queue-concepts", "1");
+    btn.className = "r4f-sbc-queue-concepts-btn";
+    btn.textContent = "Add Concepts to Queue";
+    btn.addEventListener("click", function () {
+      try {
+        addConceptPlayersToQueue(panelView);
+      } catch (err) {
+        console.warn("[R4F] Queue Concepts click failed:", err);
+        showNotification("Could not add concept players to Search V2 queue", getNegativeNotificationType());
+      }
+    });
+    return btn;
+  }
+
   /**
    * Quick Builder button: inject into the SBC squad side panel and wire click to
    * window.React4Football.runQuickSolve with the current challenge/set IDs.
+   * Add Concepts to Queue sits under it and enqueues every concept player in the squad.
    */
   function initSbcQuickBuilderButton() {
     const PanelView = getUTSBCSquadDetailPanelViewCtor();
@@ -1324,7 +1550,16 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
           return result;
         }
         const container = root.querySelector(".sbc-button-container");
-        if (!container || container.querySelector("[data-r4f-quick-builder]")) {
+        if (!container) {
+          return result;
+        }
+        const needsQuickBuilder = !container.querySelector("[data-r4f-quick-builder]");
+        const needsQueueConcepts = !container.querySelector("[data-r4f-queue-concepts]");
+        if (!needsQuickBuilder && !needsQueueConcepts) {
+          return result;
+        }
+        if (!needsQuickBuilder) {
+          container.appendChild(createQueueConceptsButton(this));
           return result;
         }
         const btn = document.createElement("button");
@@ -1399,6 +1634,9 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
         });
 
         container.appendChild(btn);
+        if (needsQueueConcepts) {
+          container.appendChild(createQueueConceptsButton(this));
+        }
       } catch (error) {
         console.warn("[R4F] Quick Builder button inject failed:", error);
       }
@@ -1563,7 +1801,19 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     lastChallengeId: null,
     /** challengeId → setId, built from /sbs/setId/{id}/challenges responses */
     challengeSetMap: new Map(),
+    /** Latest GET/PUT /sbs/challenge/{id}/squad body, used to queue concept cards. */
+    lastSquad: null,
   };
+
+  function rememberSquadPayload(url, data) {
+    const match = String(url || "").match(/\/sbs\/challenge\/(\d+)\/squad/);
+    const players = data?.squad?.players;
+    if (!match || !Array.isArray(players)) return;
+    r4fSbcContext.lastSquad = {
+      challengeId: Number(match[1]),
+      players,
+    };
+  }
 
   function trackSbcUrl(method, url) {
     const u = String(url || "");
@@ -1619,6 +1869,14 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
         }).catch(function () {});
       }
 
+      if (/\/sbs\/challenge\/\d+\/squad/.test(url)) {
+        promise.then(function (resp) {
+          resp.clone().json().then(function (data) {
+            rememberSquadPayload(url, data);
+          }).catch(function () {});
+        }).catch(function () {});
+      }
+
       return promise;
     };
 
@@ -1641,6 +1899,15 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
                 }
               }
             }
+          } catch (_) {}
+        });
+      }
+
+      if (/\/sbs\/challenge\/\d+\/squad/.test(String(url || ""))) {
+        const squadUrl = String(url);
+        this.addEventListener("load", function () {
+          try {
+            rememberSquadPayload(squadUrl, JSON.parse(this.responseText));
           } catch (_) {}
         });
       }
@@ -1873,7 +2140,8 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
   document.head.appendChild(lockStyleSheet);
 
   const sbcQuickBuilderStyles = `
-.SBCSquadPanel .sbc-button-container .r4f-sbc-quick-builder-btn {
+.SBCSquadPanel .sbc-button-container .r4f-sbc-quick-builder-btn,
+.SBCSquadPanel .sbc-button-container .r4f-sbc-queue-concepts-btn {
   display: block;
   margin: 8px auto;
   width: calc(100% - 16px);
@@ -1887,6 +2155,9 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
   font-family: UltimateTeam, sans-serif;
   font-size: 1em;
   cursor: default;
+}
+.SBCSquadPanel .sbc-button-container .r4f-sbc-queue-concepts-btn {
+  background-color: #3d4f73;
 }
 `;
   const sbcQuickBuilderStyleSheet = document.createElement("style");
