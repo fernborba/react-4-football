@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         React 4 Football
 // @namespace    http://tampermonkey.net/
-// @version      12.5.29
+// @version      12.5.30
 // @description  React UI for EA WebApp
 // @author       Fernando
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app/*
@@ -14,7 +14,7 @@
 // @updateURL    https://raw.githubusercontent.com/fernborba/react-4-football/main/dist/react4football.meta.js
 // @require      https://unpkg.com/react@18/umd/react.production.min.js
 // @require      https://unpkg.com/react-dom@18/umd/react-dom.production.min.js
-// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v12.5.29
+// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v12.5.30
 // ==/UserScript==
 
 (function () {
@@ -54,7 +54,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     obs.observe(document.documentElement, { childList: true, subtree: true });
   }
 
-  const EXPECTED_BUNDLE_VERSION = "v12.5.29";
+  const EXPECTED_BUNDLE_VERSION = "v12.5.30";
   const startupState = {
     failed: false,
     reason: null,
@@ -1206,6 +1206,90 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     panel._r4fAddToQueueButton = button;
   }
 
+  function findListOnTransferMarketButton(panel) {
+    const buttonGroup = getActionPanelButtonGroup(panel);
+    if (!buttonGroup || typeof buttonGroup.querySelectorAll !== "function") return null;
+    return Array.from(buttonGroup.querySelectorAll("button")).find(
+      (el) => el.textContent && el.textContent.trim() === "List on Transfer Market"
+    ) || null;
+  }
+
+  function injectSellAtMarketPriceButton(panel, item) {
+    panel._r4fSellAtMarketPriceItem = item;
+
+    const listButton = findListOnTransferMarketButton(panel);
+    if (!listButton || !listButton.parentNode) {
+      if (panel._r4fSellAtMarketPriceButton?.__root?.isConnected) {
+        panel._r4fSellAtMarketPriceButton.__root.remove();
+      }
+      panel._r4fSellAtMarketPriceButton = null;
+      return;
+    }
+
+    let button = panel._r4fSellAtMarketPriceButton;
+    if (button && button.__root && !button.__root.isConnected) {
+      panel._r4fSellAtMarketPriceButton = null;
+      button = null;
+    }
+
+    if (!button) {
+      button = new UTGroupButtonControl();
+      button.init();
+      button.setInteractionState(true);
+      button.setText("Sell at Market Price");
+      button.addTarget(panel, async () => {
+        const currentItem = panel._r4fSellAtMarketPriceItem;
+        if (!currentItem?.id) {
+          showNotification("No player selected to list", UINotificationType.NEGATIVE);
+          return;
+        }
+        if (panel._r4fSellAtMarketPriceBusy) return;
+
+        panel._r4fSellAtMarketPriceBusy = true;
+        button.setInteractionState(false);
+        button.setText("Searching…");
+        try {
+          const getMinPrice = window.R4F?.market?.getMinPriceForItem;
+          if (typeof getMinPrice !== "function") {
+            showNotification("Market price lookup is not ready", UINotificationType.NEGATIVE);
+            return;
+          }
+
+          const priceResult = await getMinPrice(currentItem);
+          const minBin = priceResult?.minBin;
+          if (!minBin) {
+            showNotification(
+              priceResult?.message || "No market listings found",
+              UINotificationType.NEGATIVE
+            );
+            return;
+          }
+
+          button.setText("Listing…");
+          await listItemAtPrice(currentItem.id, minBin);
+          showNotification(
+            `Listed for ${Number(minBin).toLocaleString()} ✓`,
+            UINotificationType.POSITIVE
+          );
+        } catch (e) {
+          showNotification(
+            "Sell at Market Price failed: " + (e.message || e),
+            UINotificationType.NEGATIVE
+          );
+        } finally {
+          panel._r4fSellAtMarketPriceBusy = false;
+          button.setInteractionState(true);
+          button.setText("Sell at Market Price");
+        }
+      }, EventType.TAP);
+      panel._r4fSellAtMarketPriceButton = button;
+    }
+
+    if (button.__root.nextSibling !== listButton) {
+      listButton.parentNode.insertBefore(button.__root, listButton);
+    }
+  }
+
   // Override EA's UI components to inject Lock button
   function initPlayerLockOverrides() {
     const lockedLabel = "Unlock Player React FC";
@@ -1260,6 +1344,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
           }
           injectAddToQueueButton(this, item);
         }
+        injectSellAtMarketPriceButton(this, item);
 
         return result;
       };
@@ -1315,6 +1400,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
           }
           injectAddToQueueButton(this, item);
         }
+        injectSellAtMarketPriceButton(this, item);
 
         return result;
       };
