@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         React 4 Football
 // @namespace    http://tampermonkey.net/
-// @version      12.5.30
+// @version      12.5.31
 // @description  React UI for EA WebApp
 // @author       Fernando
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app/*
@@ -14,7 +14,7 @@
 // @updateURL    https://raw.githubusercontent.com/fernborba/react-4-football/main/dist/react4football.meta.js
 // @require      https://unpkg.com/react@18/umd/react.production.min.js
 // @require      https://unpkg.com/react-dom@18/umd/react-dom.production.min.js
-// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v12.5.30
+// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v12.5.31
 // ==/UserScript==
 
 (function () {
@@ -54,7 +54,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     obs.observe(document.documentElement, { childList: true, subtree: true });
   }
 
-  const EXPECTED_BUNDLE_VERSION = "v12.5.30";
+  const EXPECTED_BUNDLE_VERSION = "v12.5.31";
   const startupState = {
     failed: false,
     reason: null,
@@ -1206,12 +1206,37 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     panel._r4fAddToQueueButton = button;
   }
 
+  function actionButtonLabel(el) {
+    if (!el) return "";
+    const btnText = typeof el.querySelector === "function"
+      ? el.querySelector(".btn-text")
+      : null;
+    return (btnText?.textContent || el.textContent || "").trim();
+  }
+
   function findListOnTransferMarketButton(panel) {
-    const buttonGroup = getActionPanelButtonGroup(panel);
-    if (!buttonGroup || typeof buttonGroup.querySelectorAll !== "function") return null;
-    return Array.from(buttonGroup.querySelectorAll("button")).find(
-      (el) => el.textContent && el.textContent.trim() === "List on Transfer Market"
-    ) || null;
+    const root = getActionPanelRoot(panel);
+    const detailPanel =
+      (root && typeof root.closest === "function"
+        ? root.closest(".DetailPanel")
+        : null)
+      || document.querySelector(
+        ".ut-navigation-container-view.ui-layout-right .DetailPanel"
+      );
+    const scopes = [
+      detailPanel?.querySelector?.(".ut-quick-list-panel-view"),
+      detailPanel,
+      root,
+    ].filter(Boolean);
+
+    for (const scope of scopes) {
+      if (typeof scope.querySelectorAll !== "function") continue;
+      const found = Array.from(scope.querySelectorAll("button")).find(
+        (el) => actionButtonLabel(el) === "List on Transfer Market"
+      );
+      if (found) return found;
+    }
+    return null;
   }
 
   function injectSellAtMarketPriceButton(panel, item) {
@@ -1223,6 +1248,16 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
         panel._r4fSellAtMarketPriceButton.__root.remove();
       }
       panel._r4fSellAtMarketPriceButton = null;
+      // Quick-list panel often mounts after the action-panel render tick.
+      if (!panel._r4fSellAtMarketPriceRetryScheduled) {
+        panel._r4fSellAtMarketPriceRetryScheduled = true;
+        setTimeout(() => {
+          panel._r4fSellAtMarketPriceRetryScheduled = false;
+          if (panel._r4fSellAtMarketPriceItem) {
+            injectSellAtMarketPriceButton(panel, panel._r4fSellAtMarketPriceItem);
+          }
+        }, 0);
+      }
       return;
     }
 
