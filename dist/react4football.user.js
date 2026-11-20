@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         React 4 Football
 // @namespace    http://tampermonkey.net/
-// @version      12.5.35
+// @version      12.5.36
 // @description  React UI for EA WebApp
 // @author       Fernando
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app/*
@@ -14,7 +14,7 @@
 // @updateURL    https://raw.githubusercontent.com/fernborba/react-4-football/main/dist/react4football.meta.js
 // @require      https://unpkg.com/react@18/umd/react.production.min.js
 // @require      https://unpkg.com/react-dom@18/umd/react-dom.production.min.js
-// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v12.5.35
+// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v12.5.36
 // ==/UserScript==
 
 (function () {
@@ -54,7 +54,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     obs.observe(document.documentElement, { childList: true, subtree: true });
   }
 
-  const EXPECTED_BUNDLE_VERSION = "v12.5.35";
+  const EXPECTED_BUNDLE_VERSION = "v12.5.36";
   const startupState = {
     failed: false,
     reason: null,
@@ -1257,33 +1257,273 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     return list.querySelector("li.listFUTItem.selected");
   }
 
-  function removeSelectedUnassignedListItem(selected) {
+  function unassignedListRows(list) {
+    return Array.from(list?.children || []).filter((el) => el.classList?.contains("listFUTItem"));
+  }
+
+  function unassignedRowItemId(row) {
+    const node = typeof row?.querySelector === "function"
+      ? row.querySelector("[data-lock-override-id]")
+      : null;
+    const id = Number(node?.getAttribute?.("data-lock-override-id"));
+    return Number.isFinite(id) ? id : null;
+  }
+
+  function itemRecord(value) {
+    if (!value || typeof value !== "object" || value.id == null) return null;
+    const id = Number(value.id);
+    return Number.isFinite(id) ? value : null;
+  }
+
+  function itemArray(value) {
+    if (!Array.isArray(value) || value.length === 0) return null;
+    const items = value.map(itemRecord).filter(Boolean);
+    return items.length ? items : null;
+  }
+
+  function readViewItems(view) {
+    if (!view || typeof view !== "object") return null;
+    let fromGetter = null;
+    if (typeof view.getItems === "function") {
+      try {
+        fromGetter = itemArray(view.getItems());
+      } catch (error) {
+        console.warn("[R4F] Unassigned list getItems failed", error);
+      }
+    }
+    if (fromGetter) return fromGetter;
+    const direct = itemArray(view.items)
+      || itemArray(view._items)
+      || itemArray(view._collection)
+      || itemArray(view._data);
+    if (direct) return direct;
+    const sections = view._sections || view.sections;
+    if (!Array.isArray(sections)) return null;
+    const flat = [];
+    sections.forEach((section) => {
+      const nested = itemArray(section?.items) || itemArray(section?._items);
+      if (nested) flat.push(...nested);
+    });
+    return flat.length ? flat : null;
+  }
+
+  function collectUnassignedListViews(list, extraViews) {
+    const views = [];
+    const seen = new Set();
+    const push = (value) => {
+      if (!value || typeof value !== "object" || seen.has(value)) return;
+      seen.add(value);
+      views.push(value);
+    };
+    const names = ["__view", "_view", "__controller", "_controller", "__itemList", "_list", "_itemList"];
+    let node = list;
+    while (node) {
+      names.forEach((name) => push(node[name]));
+      node = node.parentElement;
+    }
+    (extraViews || []).forEach((view) => {
+      push(view);
+      names.forEach((name) => push(view?.[name]));
+    });
+    return views;
+  }
+
+  function viewForRowCount(views, rowCount) {
+    const ranked = views.map((view) => ({ view, items: readViewItems(view) }));
+    return ranked.find((entry) => entry.items && entry.items.length === rowCount)
+      || ranked.find((entry) => typeof entry.view?.selectListRow === "function" && entry.items)
+      || ranked.find((entry) => entry.items)
+      || null;
+  }
+
+  function itemOnRow(row) {
+    const nodes = [row, row?.querySelector?.(".rowContent"), row?.querySelector?.(".entityContainer")];
+    for (const node of nodes) {
+      if (!node) continue;
+      const direct = itemRecord(node.__item) || itemRecord(node._item) || itemRecord(node.item) || itemRecord(node.data);
+      if (direct) return direct;
+      const view = node.__view || node._view;
+      const nested = itemRecord(view?.item) || itemRecord(view?._item) || itemRecord(view?.__item) || itemRecord(view?.data);
+      if (nested) return nested;
+    }
+    return null;
+  }
+
+  function lookupEaItemById(id) {
+    const numericId = Number(id);
+    if (!Number.isFinite(numericId)) return null;
+    const sources = [];
+    try {
+      if (typeof getEAServices === "function") sources.push(getEAServices()?.Item);
+    } catch (error) {
+      // The sell button can run before EA services exist.
+    }
+    try {
+      if (typeof eaWindow !== "undefined") sources.push(eaWindow?.services?.Item, eaWindow?.repositories?.Item);
+    } catch (error) {
+      // eaWindow is absent in tests.
+    }
+    try {
+      if (typeof services !== "undefined") sources.push(services?.Item);
+    } catch (error) {
+      // EA's services global is absent in tests.
+    }
+
+    for (const source of sources) {
+      if (!source) continue;
+      const dao = source.itemDao;
+      const found = itemRecord(dao?._collection?.[numericId])
+        || itemRecord(dao?._collection?.[String(numericId)])
+        || callItemLookup(dao?.get, dao, numericId)
+        || callItemLookup(dao?.getItem, dao, numericId)
+        || callItemLookup(source.getItem, source, numericId)
+        || callItemLookup(source.get, source, numericId);
+      if (found && Number(found.id) === numericId) return found;
+    }
+    return null;
+  }
+
+  function callItemLookup(fn, owner, id) {
+    if (typeof fn !== "function") return null;
+    try {
+      return itemRecord(fn.call(owner, id));
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function storedSellItemId(group) {
+    const id = Number(group?._r4fSellAtMarketPriceItem?.id);
+    return Number.isFinite(id) ? id : null;
+  }
+
+  function rememberNextSellItem(context, item) {
+    const record = itemRecord(item);
+    const soldId = Number(context?.soldItemId);
+    if (!record || !context?.group || Number(record.id) === soldId) return false;
+    context.group._r4fSellAtMarketPriceItem = record;
+    if (typeof context.panel?.setItem === "function") {
+      try {
+        context.panel.setItem(record);
+      } catch (error) {
+        console.warn("[R4F] Could not show the next unassigned player", error);
+      }
+    }
+    console.log("[R4F] Unassigned sell advanced", { soldItemId: context.soldItemId, nextItemId: record.id });
+    return true;
+  }
+
+  function clearSoldSellItem(context) {
+    const soldId = Number(context?.soldItemId);
+    if (!context?.group || !Number.isFinite(soldId)) return;
+    if (storedSellItemId(context.group) !== soldId) return;
+    context.group._r4fSellAtMarketPriceItem = null;
+    console.log("[R4F] Unassigned sell advanced", { soldItemId: soldId, nextItemId: null });
+  }
+
+  function tapUnassignedRow(row) {
+    const target = row?.querySelector?.(".rowContent") || row;
+    if (!target || typeof target.dispatchEvent !== "function") return;
+    const init = { bubbles: true, cancelable: true, composed: true, button: 0, buttons: 1 };
+    if (typeof PointerEvent === "function") {
+      target.dispatchEvent(new PointerEvent("pointerdown", init));
+      target.dispatchEvent(new PointerEvent("pointerup", init));
+    }
+    target.dispatchEvent(new MouseEvent("mousedown", init));
+    target.dispatchEvent(new MouseEvent("mouseup", init));
+    if (typeof target.click === "function") target.click();
+  }
+
+  function selectUnassignedViewRow(view, index) {
+    if (!view || index < 0) return false;
+    const name = ["selectListRow", "selectRow", "setSelectedIndex"].find((method) => typeof view[method] === "function");
+    if (!name) return false;
+    try {
+      view[name](index);
+      return true;
+    } catch (error) {
+      console.warn("[R4F] Unassigned list selection failed", error);
+      return false;
+    }
+  }
+
+  function dropSoldUnassignedItem(view, soldId, rowCount) {
+    if (!view || typeof view.setItems !== "function" || !Number.isFinite(soldId)) return false;
+    const items = readViewItems(view);
+    if (!items || items.length !== rowCount) return false;
+    const remaining = items.filter((item) => Number(item.id) !== soldId);
+    if (remaining.length === items.length) return false;
+    try {
+      view.setItems(remaining);
+      return true;
+    } catch (error) {
+      console.warn("[R4F] Unassigned list item removal failed", error);
+      return false;
+    }
+  }
+
+  function markUnassignedRowSelected(row) {
+    if (!row?.classList) return;
+    row.classList.add("selected");
+    const content = row.querySelector?.(".rowContent");
+    if (content?.classList) content.classList.add("active");
+  }
+
+  function removeSelectedUnassignedListItem(selected, context) {
     if (!selected || !selected.isConnected || typeof selected.closest !== "function") return false;
     const list = selected.closest(".ut-unassigned-view.ui-layout-left ul.itemList");
     if (!list || !list.contains(selected)) return false;
 
-    const next = selected.nextElementSibling;
-    const prev = selected.previousElementSibling;
-    selected.remove();
+    const rows = unassignedListRows(list);
+    const index = rows.indexOf(selected);
+    const soldId = Number(context?.soldItemId);
+    const storedId = storedSellItemId(context?.group);
+    const selectionMoved = Number.isFinite(soldId) && storedId != null && storedId !== soldId;
+    const anotherSelected = rows.find((row) => row !== selected && row.classList.contains("selected"));
+    if (selectionMoved || anotherSelected) {
+      selected.remove();
+      return true;
+    }
 
-    if (list.querySelector("li.listFUTItem.selected")) return true;
+    const next = index >= 0 && index + 1 < rows.length
+      ? rows[index + 1]
+      : (index > 0 ? rows[index - 1] : null);
+    const nextIndex = next ? rows.indexOf(next) : -1;
+    const views = collectUnassignedListViews(list, context?.views);
+    const choice = viewForRowCount(views, rows.length);
+    const nextItem = itemOnRow(next)
+      || itemRecord(choice?.items?.[nextIndex])
+      || lookupEaItemById(unassignedRowItemId(next));
 
-    const fallback = [next, prev].find((el) =>
-      el
-      && el.isConnected
-      && el.classList
-      && el.classList.contains("listFUTItem")
-      && list.contains(el)
+    const dropped = dropSoldUnassignedItem(choice?.view, soldId, rows.length);
+    const liveRows = unassignedListRows(list);
+    const nextId = unassignedRowItemId(next) || (nextItem ? Number(nextItem.id) : null);
+    const target = (dropped
+      ? liveRows.find((row) => unassignedRowItemId(row) === nextId) || liveRows[Math.min(Math.max(index, 0), liveRows.length - 1)]
+      : next) || null;
+    const targetIndex = target ? unassignedListRows(list).indexOf(target) : -1;
+
+    if (target) tapUnassignedRow(target);
+    const itemsAfterDrop = readViewItems(choice?.view);
+    const modelIndex = nextItem
+      ? (itemsAfterDrop || []).findIndex((item) => Number(item.id) === Number(nextItem.id))
+      : -1;
+    selectUnassignedViewRow(
+      choice?.view,
+      modelIndex >= 0 ? modelIndex : (targetIndex >= 0 ? targetIndex : nextIndex)
     );
-    if (!fallback) return true;
 
-    const row = typeof fallback.querySelector === "function"
-      ? fallback.querySelector(".rowContent")
-      : null;
-    const target = row || fallback;
-    if (typeof target.click === "function") target.click();
-    fallback.classList.add("selected");
-    if (row?.classList) row.classList.add("active");
+    if (Number.isFinite(soldId) && storedSellItemId(context?.group) === soldId) {
+      if (!rememberNextSellItem(context, nextItem)) clearSoldSellItem(context);
+    }
+
+    if (selected.isConnected && selected !== target) {
+      const rowId = unassignedRowItemId(selected);
+      if (!Number.isFinite(soldId) || rowId == null || rowId === soldId) selected.remove();
+    }
+    if (target?.isConnected && !list.querySelector("li.listFUTItem.selected")) {
+      markUnassignedRowSelected(target);
+    }
     return true;
   }
 
@@ -1360,7 +1600,12 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
           button.setText("Listing…");
           const startingBid = calculateStartingBid(minBin);
           await listItemAtPrice(currentItem.id, minBin);
-          removeSelectedUnassignedListItem(selectedUnassignedItem);
+          removeSelectedUnassignedListItem(selectedUnassignedItem, {
+            group,
+            panel,
+            soldItemId: currentItem.id,
+            views: [sellAllState.lastUnassignedView],
+          });
           showNotification(
             `Listed start ${Number(startingBid).toLocaleString()} / BIN ${Number(minBin).toLocaleString()} ✓`,
             UINotificationType.POSITIVE
