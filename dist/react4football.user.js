@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         React 4 Football
 // @namespace    http://tampermonkey.net/
-// @version      12.5.34
+// @version      12.5.35
 // @description  React UI for EA WebApp
 // @author       Fernando
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app/*
@@ -14,7 +14,7 @@
 // @updateURL    https://raw.githubusercontent.com/fernborba/react-4-football/main/dist/react4football.meta.js
 // @require      https://unpkg.com/react@18/umd/react.production.min.js
 // @require      https://unpkg.com/react-dom@18/umd/react-dom.production.min.js
-// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v12.5.34
+// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v12.5.35
 // ==/UserScript==
 
 (function () {
@@ -54,7 +54,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     obs.observe(document.documentElement, { childList: true, subtree: true });
   }
 
-  const EXPECTED_BUNDLE_VERSION = "v12.5.34";
+  const EXPECTED_BUNDLE_VERSION = "v12.5.35";
   const startupState = {
     failed: false,
     reason: null,
@@ -1250,6 +1250,43 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     });
   }
 
+  function findSelectedUnassignedListItem(root) {
+    const scope = root && typeof root.querySelector === "function" ? root : document;
+    const list = scope.querySelector(".ut-unassigned-view.ui-layout-left ul.itemList");
+    if (!list) return null;
+    return list.querySelector("li.listFUTItem.selected");
+  }
+
+  function removeSelectedUnassignedListItem(selected) {
+    if (!selected || !selected.isConnected || typeof selected.closest !== "function") return false;
+    const list = selected.closest(".ut-unassigned-view.ui-layout-left ul.itemList");
+    if (!list || !list.contains(selected)) return false;
+
+    const next = selected.nextElementSibling;
+    const prev = selected.previousElementSibling;
+    selected.remove();
+
+    if (list.querySelector("li.listFUTItem.selected")) return true;
+
+    const fallback = [next, prev].find((el) =>
+      el
+      && el.isConnected
+      && el.classList
+      && el.classList.contains("listFUTItem")
+      && list.contains(el)
+    );
+    if (!fallback) return true;
+
+    const row = typeof fallback.querySelector === "function"
+      ? fallback.querySelector(".rowContent")
+      : null;
+    const target = row || fallback;
+    if (typeof target.click === "function") target.click();
+    fallback.classList.add("selected");
+    if (row?.classList) row.classList.add("active");
+    return true;
+  }
+
   function injectSellAtMarketPriceButton(panel, item) {
     const listButton = findListOnTransferMarketButton(panel);
     if (!listButton || !listButton.parentNode) {
@@ -1293,6 +1330,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
         }
         if (group._r4fSellAtMarketPriceBusy) return;
 
+        const selectedUnassignedItem = findSelectedUnassignedListItem();
         group._r4fSellAtMarketPriceBusy = true;
         button.setInteractionState(false);
         button.setText("Searching…");
@@ -1322,6 +1360,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
           button.setText("Listing…");
           const startingBid = calculateStartingBid(minBin);
           await listItemAtPrice(currentItem.id, minBin);
+          removeSelectedUnassignedListItem(selectedUnassignedItem);
           showNotification(
             `Listed start ${Number(startingBid).toLocaleString()} / BIN ${Number(minBin).toLocaleString()} ✓`,
             UINotificationType.POSITIVE
