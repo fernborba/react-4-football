@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         React 4 Football
 // @namespace    http://tampermonkey.net/
-// @version      12.5.31
+// @version      12.5.32
 // @description  React UI for EA WebApp
 // @author       Fernando
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app/*
@@ -14,7 +14,7 @@
 // @updateURL    https://raw.githubusercontent.com/fernborba/react-4-football/main/dist/react4football.meta.js
 // @require      https://unpkg.com/react@18/umd/react.production.min.js
 // @require      https://unpkg.com/react-dom@18/umd/react-dom.production.min.js
-// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v12.5.31
+// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v12.5.32
 // ==/UserScript==
 
 (function () {
@@ -54,7 +54,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     obs.observe(document.documentElement, { childList: true, subtree: true });
   }
 
-  const EXPECTED_BUNDLE_VERSION = "v12.5.31";
+  const EXPECTED_BUNDLE_VERSION = "v12.5.32";
   const startupState = {
     failed: false,
     reason: null,
@@ -1239,48 +1239,61 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     return null;
   }
 
-  function injectSellAtMarketPriceButton(panel, item) {
-    panel._r4fSellAtMarketPriceItem = item;
+  function removeOrphanSellAtMarketPriceButtons(group, keepRoot) {
+    if (!group || typeof group.querySelectorAll !== "function") return;
+    Array.from(group.querySelectorAll("button")).forEach((el) => {
+      if (keepRoot && el === keepRoot) return;
+      const isOurs =
+        el.classList?.contains("r4f-sell-at-market-price")
+        || actionButtonLabel(el) === "Sell at Market Price";
+      if (isOurs) el.remove();
+    });
+  }
 
+  function injectSellAtMarketPriceButton(panel, item) {
     const listButton = findListOnTransferMarketButton(panel);
     if (!listButton || !listButton.parentNode) {
-      if (panel._r4fSellAtMarketPriceButton?.__root?.isConnected) {
-        panel._r4fSellAtMarketPriceButton.__root.remove();
-      }
-      panel._r4fSellAtMarketPriceButton = null;
       // Quick-list panel often mounts after the action-panel render tick.
       if (!panel._r4fSellAtMarketPriceRetryScheduled) {
         panel._r4fSellAtMarketPriceRetryScheduled = true;
         setTimeout(() => {
           panel._r4fSellAtMarketPriceRetryScheduled = false;
-          if (panel._r4fSellAtMarketPriceItem) {
-            injectSellAtMarketPriceButton(panel, panel._r4fSellAtMarketPriceItem);
-          }
+          injectSellAtMarketPriceButton(panel, item);
         }, 0);
       }
       return;
     }
 
-    let button = panel._r4fSellAtMarketPriceButton;
-    if (button && button.__root && !button.__root.isConnected) {
-      panel._r4fSellAtMarketPriceButton = null;
+    const group = listButton.parentNode;
+    // Persist selected item on the shared quick-list group (panel instances change per player).
+    group._r4fSellAtMarketPriceItem = item;
+
+    let button = group._r4fSellAtMarketPriceButton;
+    if (button && button.__root && (!button.__root.isConnected || button.__root.parentNode !== group)) {
+      group._r4fSellAtMarketPriceButton = null;
       button = null;
     }
+
+    // Drop duplicates left by prior panel instances / dual Slot+Default hooks.
+    removeOrphanSellAtMarketPriceButtons(group, button?.__root || null);
 
     if (!button) {
       button = new UTGroupButtonControl();
       button.init();
       button.setInteractionState(true);
       button.setText("Sell at Market Price");
+      if (button.__root?.classList) {
+        button.__root.classList.add("r4f-sell-at-market-price");
+      }
       button.addTarget(panel, async () => {
-        const currentItem = panel._r4fSellAtMarketPriceItem;
+        const currentItem = group._r4fSellAtMarketPriceItem;
         if (!currentItem?.id) {
           showNotification("No player selected to list", UINotificationType.NEGATIVE);
           return;
         }
-        if (panel._r4fSellAtMarketPriceBusy) return;
+        if (group._r4fSellAtMarketPriceBusy) return;
 
-        panel._r4fSellAtMarketPriceBusy = true;
+        group._r4fSellAtMarketPriceBusy = true;
         button.setInteractionState(false);
         button.setText("Searching…");
         try {
@@ -1312,16 +1325,16 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
             UINotificationType.NEGATIVE
           );
         } finally {
-          panel._r4fSellAtMarketPriceBusy = false;
+          group._r4fSellAtMarketPriceBusy = false;
           button.setInteractionState(true);
           button.setText("Sell at Market Price");
         }
       }, EventType.TAP);
-      panel._r4fSellAtMarketPriceButton = button;
+      group._r4fSellAtMarketPriceButton = button;
     }
 
     if (button.__root.nextSibling !== listButton) {
-      listButton.parentNode.insertBefore(button.__root, listButton);
+      group.insertBefore(button.__root, listButton);
     }
   }
 
