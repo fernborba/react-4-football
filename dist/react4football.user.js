@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         React 4 Football
 // @namespace    http://tampermonkey.net/
-// @version      12.5.33
+// @version      12.5.34
 // @description  React UI for EA WebApp
 // @author       Fernando
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app/*
@@ -14,7 +14,7 @@
 // @updateURL    https://raw.githubusercontent.com/fernborba/react-4-football/main/dist/react4football.meta.js
 // @require      https://unpkg.com/react@18/umd/react.production.min.js
 // @require      https://unpkg.com/react-dom@18/umd/react-dom.production.min.js
-// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v12.5.33
+// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v12.5.34
 // ==/UserScript==
 
 (function () {
@@ -54,7 +54,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     obs.observe(document.documentElement, { childList: true, subtree: true });
   }
 
-  const EXPECTED_BUNDLE_VERSION = "v12.5.33";
+  const EXPECTED_BUNDLE_VERSION = "v12.5.34";
   const startupState = {
     failed: false,
     reason: null,
@@ -1304,7 +1304,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
           }
 
           const priceResult = await getMinPrice(currentItem);
-          const minBin = priceResult?.minBin;
+          let minBin = priceResult?.minBin;
           if (!minBin) {
             showNotification(
               priceResult?.message || "No market listings found",
@@ -1313,10 +1313,17 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
             return;
           }
 
+          // The first page often misses a cheaper BIN (650 hidden behind two 700s).
+          // Step max buy-now down until a search comes back empty, then list at that floor.
+          if (priceResult.marketType === "player" && priceResult.definitionId) {
+            minBin = await refinePlayerMinBin(priceResult.definitionId, minBin);
+          }
+
           button.setText("Listing…");
+          const startingBid = calculateStartingBid(minBin);
           await listItemAtPrice(currentItem.id, minBin);
           showNotification(
-            `Listed for ${Number(minBin).toLocaleString()} ✓`,
+            `Listed start ${Number(startingBid).toLocaleString()} / BIN ${Number(minBin).toLocaleString()} ✓`,
             UINotificationType.POSITIVE
           );
         } catch (e) {
@@ -2642,8 +2649,8 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
   window.R4F.market = {};
   window.R4F.club = {};
 
-  async function searchMarket({ marketType, definitionId, maxb }) {
-    const endpoint = buildTransferMarketEndpoint({ marketType, definitionId, maxb });
+  async function searchMarket({ marketType, definitionId, maxb, macr }) {
+    const endpoint = buildTransferMarketEndpoint({ marketType, definitionId, maxb, macr });
     let response = await storeApiGet(endpoint);
     let auctions = response.auctionInfo || [];
 
@@ -2665,13 +2672,17 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     };
   }
 
-  function buildTransferMarketEndpoint({ marketType, definitionId, maxb }) {
+  function buildTransferMarketEndpoint({ marketType, definitionId, maxb, macr }) {
     const params = new URLSearchParams({
       num: "21",
       start: "0",
       type: marketType,
       definitionId: String(definitionId),
     });
+    // macr has to stay above maxb, otherwise EA serves a cached page.
+    if (macr !== undefined && macr !== null) {
+      params.set("macr", String(macr));
+    }
     if (maxb !== undefined && maxb !== null) {
       params.set("maxb", String(maxb));
     }
@@ -2731,6 +2742,32 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
 
       if (!refined.minBin) break;
       currentMinBin = refined.minBin;
+    }
+
+    return currentMinBin;
+  }
+
+  // Walk one listable step below the observed BIN until the market has nothing
+  // cheaper. A page of 700s can hide a 650 BIN until maxb is set to 650.
+  async function refinePlayerMinBin(definitionId, startingMinBin) {
+    let currentMinBin = startingMinBin;
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const nextCeiling = previousListablePriceStep(currentMinBin);
+      if (!Number.isFinite(nextCeiling) || nextCeiling <= 0 || nextCeiling >= currentMinBin) {
+        break;
+      }
+
+      await sleep(400);
+      const refined = await searchMarket({
+        marketType: "player",
+        definitionId,
+        maxb: nextCeiling,
+        macr: nextListablePriceStep(nextCeiling),
+      });
+      const nextMin = refined.withBin.find((auction) => auction.buyNowPrice <= nextCeiling)?.buyNowPrice;
+      if (!nextMin || nextMin >= currentMinBin) break;
+      currentMinBin = nextMin;
     }
 
     return currentMinBin;
