@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         React 4 Football
 // @namespace    http://tampermonkey.net/
-// @version      12.5.32
+// @version      12.5.33
 // @description  React UI for EA WebApp
 // @author       Fernando
 // @match        https://www.ea.com/ea-sports-fc/ultimate-team/web-app/*
@@ -14,7 +14,7 @@
 // @updateURL    https://raw.githubusercontent.com/fernborba/react-4-football/main/dist/react4football.meta.js
 // @require      https://unpkg.com/react@18/umd/react.production.min.js
 // @require      https://unpkg.com/react-dom@18/umd/react-dom.production.min.js
-// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v12.5.32
+// @require      https://raw.githubusercontent.com/fernborba/react-4-football/refs/heads/main/dist/index4.js?v=v12.5.33
 // ==/UserScript==
 
 (function () {
@@ -54,7 +54,7 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     obs.observe(document.documentElement, { childList: true, subtree: true });
   }
 
-  const EXPECTED_BUNDLE_VERSION = "v12.5.32";
+  const EXPECTED_BUNDLE_VERSION = "v12.5.33";
   const startupState = {
     failed: false,
     reason: null,
@@ -2679,10 +2679,14 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
   }
 
   function getSupportedMarketType(item) {
-    if (!item?.itemType) return null;
+    if (!item) return null;
     if (item.itemType === "player") return "player";
     if (item.itemType === "vanity") return "vanity";
     if (item.itemType === "training") return "training";
+    // Club / detail-panel items often expose isPlayer() without a string itemType.
+    try {
+      if (typeof item.isPlayer === "function" && item.isPlayer()) return "player";
+    } catch (_) {}
     return null;
   }
 
@@ -2698,8 +2702,12 @@ body{background-position:center;background-color:#191820;background-repeat:no-re
     const marketType = getSupportedMarketType(item);
     if (!marketType) return null;
 
-    const definitionId = marketType === "player" ? item.assetId : item.resourceId;
-    if (!definitionId || typeof definitionId !== "number") return null;
+    const rawDefinitionId =
+      marketType === "player"
+        ? (item.assetId ?? item.definitionId)
+        : item.resourceId;
+    const definitionId = Number(rawDefinitionId);
+    if (!Number.isFinite(definitionId) || definitionId <= 0) return null;
 
     return {
       marketType,
